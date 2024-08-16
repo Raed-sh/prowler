@@ -1,0 +1,30 @@
+{
+    "Provider": "aws",
+    "CheckID": "cloudwatch_alarm_for_ec2_cpu_utilization",
+    "CheckTitle": "Ensure CloudWatch Alarms are Set for EC2 CPU Utilization",
+    "CheckType": ["Infrastructure Security"],
+    "ServiceName": "ec2",
+    "SubServiceName": "cpu_utilization",
+    "ResourceIdTemplate": "arn:aws:ec2:region:account-id:instance/instance-id",
+    "Severity": "high",
+    "ResourceType": "AWS::EC2::Instance",
+    "Description": "Ensure that CloudWatch alarms are configured to monitor the CPU utilization of EC2 instances to detect performance issues.",
+    "Risk": "Lack of monitoring for CPU utilization can lead to undetected performance issues or resource constraints.",
+    "RelatedUrl": "https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/CloudWatch_Alarms.html",
+    "Remediation": {
+        "Code": {
+            "CLI": "aws cloudwatch describe-alarms --query 'MetricAlarms[?MetricName==`CPUUtilization` && Namespace==`AWS/EC2`]'",
+            "NativeIaC": "",
+            "Other": "",
+            "Terraform": ""
+        },
+        "Recommendation": {
+            "Text": "Ensure CloudWatch alarms are configured to monitor the CPU utilization of all EC2 instances.",
+            "Url": "https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/CloudWatch_Alarms.html"
+        }
+    },
+    "Categories": ["monitoring"],
+    "DependsOn": [],
+    "RelatedTo": [],
+    "Notes": ""
+}
