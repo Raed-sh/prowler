@@ -2,6 +2,7 @@ from prowler.lib.check.models import Check, Check_Report_AWS
 from prowler.providers.aws.services.cloudwatch.cloudwatch_client import cloudwatch_client
 from prowler.providers.aws.services.ec2.ec2_client import ec2_client
 
+
 class cloudwatch_alarm_for_ec2_cpu_utilization(Check):
     def execute(self):
         findings = []
@@ -16,6 +17,8 @@ class cloudwatch_alarm_for_ec2_cpu_utilization(Check):
             report.resource_id = instance.id
             report.resource_arn = instance.arn
             report.resource_tags = instance.tags
+            report.status = "FAIL"
+            report.status_extended = f"No CloudWatch alarms found for EC2 instance '{instance.id}' CPU utilization."
 
             # Check if any alarm is configured for EC2 CPU utilization for the current instance
             alarms_found = any(
@@ -26,9 +29,6 @@ class cloudwatch_alarm_for_ec2_cpu_utilization(Check):
             if alarms_found:
                 report.status = "PASS"
                 report.status_extended = f"CloudWatch alarm(s) found for EC2 instance '{instance.id}' CPU utilization."
-            else:
-                report.status = "FAIL"
-                report.status_extended = f"No CloudWatch alarms found for EC2 instance '{instance.id}' CPU utilization."
 
             findings.append(report)
 

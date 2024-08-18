@@ -19,7 +19,7 @@ class ec2_instances_have_network_acl_or_security_group(Check):
             if instance.security_groups:
                 findings.append(report)
                 continue
-            
+
             # Check if the instance is associated with a subnet that has a network ACL
             network_acl_attached = False
             subnet_id = instance.subnet_id
@@ -31,6 +31,6 @@ class ec2_instances_have_network_acl_or_security_group(Check):
             if not network_acl_attached:
                 report.status = "FAIL"
                 report.status_extended = f"Instance {instance.id} does not have security groups or network ACLs attached."
-                
+
             findings.append(report)
         return findings
