@@ -2,6 +2,7 @@ from prowler.lib.check.models import Check, Check_Report_AWS
 from prowler.providers.aws.services.cloudwatch.cloudwatch_client import cloudwatch_client
 from prowler.providers.aws.services.awslambda.awslambda_client import awslambda_client
 
+
 class cloudwatch_alarm_for_lambda_error_rate(Check):
     def execute(self):
         findings = []
@@ -11,16 +12,15 @@ class cloudwatch_alarm_for_lambda_error_rate(Check):
         expected_namespace = 'AWS/Lambda'
 
         for function in awslambda_client.functions.values():
-            
+
             report = Check_Report_AWS(self.metadata())
             report.region = function.region
             report.resource_id = function.name
             report.resource_arn = function.arn
             report.resource_tags = function.tags
-
             report.status = "FAIL"
-           
-            
+            report.status_extended = f"No CloudWatch alarms found for Lambda function '{function.name}' error rate."
+
             alarms_found = any(
                 alarm.metric == expected_metric_name and alarm.name_space == expected_namespace
                 for alarm in cloudwatch_client.metric_alarms
@@ -29,9 +29,6 @@ class cloudwatch_alarm_for_lambda_error_rate(Check):
             if alarms_found:
                 report.status = "PASS"
                 report.status_extended = f"CloudWatch alarm(s) found for Lambda function '{function.name}' error rate."
-            else:
-                report.status = "FAIL"
-                report.status_extended = f"No CloudWatch alarms found for Lambda function '{function.name}' error rate."
 
             findings.append(report)
 
