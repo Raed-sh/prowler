@@ -82,7 +82,7 @@ class OCSF(Output):
                                 [
                                     finding.remediation_code_nativeiac,
                                     finding.remediation_code_terraform,
-                                    finding.remediation_code_cli,
+                                    # finding.remediation_code_cli, COMMENTED out AS WE WILL NOT USE IT
                                     finding.remediation_code_other,
                                     finding.remediation_recommendation_url,
                                 ],
