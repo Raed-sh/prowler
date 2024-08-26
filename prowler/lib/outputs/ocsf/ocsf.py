@@ -92,6 +92,10 @@ class OCSF(Output):
                             filter(
                                 None,
                                 [
+                                    finding.metadata.Remediation.Code.NativeIaC,
+                                    finding.metadata.Remediation.Code.Terraform,
+                                    # finding.metadata.Remediation.Code.CLI, COMMENTED out AS WE WILL NOT USE IT
+                                    finding.metadata.Remediation.Code.Other,
                                     finding.metadata.Remediation.Recommendation.Url,
                                 ],
                             )
