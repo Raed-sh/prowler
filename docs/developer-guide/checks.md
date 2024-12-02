@@ -160,14 +160,20 @@ else:
 All the checks MUST fill the `report.resource_id` and `report.resource_arn` with the following criteria:
 
 - AWS
-    - Resource ID -- `report.resource_id`
-        - AWS Account --> Account Number `123456789012`
-        - AWS Resource --> Resource ID / Name
-        - Root resource --> `<root_account>`
-    - Resource ARN -- `report.resource_arn`
-        - AWS Account --> Root ARN `arn:aws:iam::123456789012:root`
-        - AWS Resource --> Resource ARN
-        - Root resource --> Resource Type ARN `f"arn:{service_client.audited_partition}:<service_name>:{service_client.region}:{service_client.audited_account}:<resource_type>"`
+    - Resouce ID and resource ARN:
+        - If the resource audited is the AWS account:
+            - `resource_id` -> AWS Account Number
+            - `resource_arn` -> AWS Account Root ARN
+        - If we can’t get the ARN from the resource audited, we create a valid ARN with the `resource_id` part as the resource audited. Examples:
+            - Bedrock -> `arn:<partition>:bedrock:<region>:<account-id>:model-invocation-logging`
+            - DirectConnect -> `arn:<partition>:directconnect:<region>:<account-id>:dxcon`
+        - If there is no real resource to audit we do the following:
+            - resource_id -> `resource_type/unknown`
+            - resource_arn -> `arn:<partition>:<service>:<region>:<account-id>:<resource_type>/unknown`
+            - Examples:
+                - AWS Security Hub -> `arn:<partition>:security-hub:<region>:<account-id>:hub/unknown`
+                - Access Analyzer -> `arn:<partition>:access-analyzer:<region>:<account-id>:analyzer/unknown`
+                - GuardDuty -> `arn:<partition>:guardduty:<region>:<account-id>:detector/unknown`
 - GCP
     - Resource ID -- `report.resource_id`
         - GCP Resource --> Resource ID
@@ -272,7 +278,7 @@ Each Prowler check has metadata associated which is stored at the same level of 
   # Severity holds the check's severity, always in lowercase (critical, high, medium, low or informational)
   "Severity": "critical",
   # ResourceType only for AWS, holds the type from here
-  # https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-template-resource-type-ref.html
+  # https://docs.aws.amazon.com/securityhub/latest/userguide/asff-resources.html
   "ResourceType": "Other",
   # Description holds the title of the check, for now is the same as CheckTitle
   "Description": "Ensure there are no EC2 AMIs set as Public.",

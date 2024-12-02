@@ -8,6 +8,7 @@ from prowler.lib.check.compliance_models import (
     ENS_Requirement_Attribute_Tipos,
     Generic_Compliance_Requirement_Attribute,
     ISO27001_2013_Requirement_Attribute,
+    KISA_ISMSP_Requirement_Attribute,
     Mitre_Requirement,
     Mitre_Requirement_Attribute_AWS,
     Mitre_Requirement_Attribute_Azure,
@@ -468,6 +469,100 @@ ENS_RD2022_AWS = Compliance(
         ),
     ],
 )
+ENS_RD2022_AZURE_NAME = "ens_rd2022_azure"
+ENS_RD2022_AZURE = Compliance(
+    Framework="ENS",
+    Provider="Azure",
+    Version="RD2022",
+    Description="The accreditation scheme of the ENS (National Security Scheme) has been developed by the Ministry of Finance and Public Administrations and the CCN (National Cryptological Center). This includes the basic principles and minimum requirements necessary for the adequate protection of information.",
+    Requirements=[
+        Compliance_Requirement(
+            Id="op.exp.8.azure.ct.3",
+            Description="Registro de actividad",
+            Name=None,
+            Attributes=[
+                ENS_Requirement_Attribute(
+                    IdGrupoControl="op.exp.8",
+                    Marco="operacional",
+                    Categoria="explotación",
+                    DescripcionControl="Habilitar la validación de archivos en todos los trails, evitando así que estos se vean modificados o eliminados.",
+                    Tipo=ENS_Requirement_Attribute_Tipos.requisito,
+                    Nivel=ENS_Requirement_Attribute_Nivel.alto,
+                    Dimensiones=["trazabilidad"],
+                    ModoEjecucion="automático",
+                    Dependencias=[],
+                )
+            ],
+            Checks=["cloudtrail_log_file_validation_enabled"],
+        ),
+        Compliance_Requirement(
+            Id="op.exp.8.azure.ct.4",
+            Description="Registro de actividad",
+            Name=None,
+            Attributes=[
+                ENS_Requirement_Attribute(
+                    IdGrupoControl="op.exp.8",
+                    Marco="operacional",
+                    Categoria="explotación",
+                    DescripcionControl="Habilitar la validación de archivos en todos los trails, evitando así que estos se vean modificados o eliminados.",
+                    Tipo=ENS_Requirement_Attribute_Tipos.requisito,
+                    Nivel=ENS_Requirement_Attribute_Nivel.alto,
+                    Dimensiones=["trazabilidad"],
+                    ModoEjecucion="automático",
+                    Dependencias=[],
+                )
+            ],
+            Checks=[],
+        ),
+    ],
+)
+ENS_RD2022_GCP_NAME = "ens_rd2022_gcp"
+ENS_RD2022_GCP = Compliance(
+    Framework="ENS",
+    Provider="GCP",
+    Version="RD2022",
+    Description="The accreditation scheme of the ENS (National Security Scheme) has been developed by the Ministry of Finance and Public Administrations and the CCN (National Cryptological Center). This includes the basic principles and minimum requirements necessary for the adequate protection of information.",
+    Requirements=[
+        Compliance_Requirement(
+            Id="op.exp.8.gcp.ct.3",
+            Description="Registro de actividad",
+            Name=None,
+            Attributes=[
+                ENS_Requirement_Attribute(
+                    IdGrupoControl="op.exp.8",
+                    Marco="operacional",
+                    Categoria="explotación",
+                    DescripcionControl="Habilitar la validación de archivos en todos los trails, evitando así que estos se vean modificados o eliminados.",
+                    Tipo=ENS_Requirement_Attribute_Tipos.requisito,
+                    Nivel=ENS_Requirement_Attribute_Nivel.alto,
+                    Dimensiones=["trazabilidad"],
+                    ModoEjecucion="automático",
+                    Dependencias=[],
+                )
+            ],
+            Checks=["cloudtrail_log_file_validation_enabled"],
+        ),
+        Compliance_Requirement(
+            Id="op.exp.8.gcp.ct.4",
+            Description="Registro de actividad",
+            Name=None,
+            Attributes=[
+                ENS_Requirement_Attribute(
+                    IdGrupoControl="op.exp.8",
+                    Marco="operacional",
+                    Categoria="explotación",
+                    DescripcionControl="Habilitar la validación de archivos en todos los trails, evitando así que estos se vean modificados o eliminados.",
+                    Tipo=ENS_Requirement_Attribute_Tipos.requisito,
+                    Nivel=ENS_Requirement_Attribute_Nivel.alto,
+                    Dimensiones=["trazabilidad"],
+                    ModoEjecucion="automático",
+                    Dependencias=[],
+                )
+            ],
+            Checks=[],
+        ),
+    ],
+)
 NOT_PRESENT_COMPLIANCE_NAME = "not_present_compliance_name"
 NOT_PRESENT_COMPLIANCE = Compliance(
     Framework="NOT_EXISTENT",
@@ -626,6 +721,76 @@ NIST_800_53_REVISION_4_AWS = Compliance(
                     Section="Access Control (AC)",
                     SubSection="Account Management (AC-2)",
                     Service="aws",
+                )
+            ],
+            Checks=[],
+        ),
+    ],
+)
+KISA_ISMSP_AWS_NAME = "kisa_isms-p_2023_aws"
+KISA_ISMSP_AWS = Compliance(
+    Framework="KISA-ISMS-P",
+    Provider="AWS",
+    Version="2023",
+    Description="The ISMS-P certification, established by KISA Korea Internet & Security Agency",
+    Requirements=[
+        Compliance_Requirement(
+            Id="2.5.3",
+            Name="User Authentication",
+            Description="User access to information systems",
+            Attributes=[
+                KISA_ISMSP_Requirement_Attribute(
+                    Domain="2. Protection Measure Requirements",
+                    Subdomain="2.5. Authentication and Authorization Management",
+                    Section="2.5.3 User Authentication",
+                    AuditChecklist=[
+                        "Is access to information systems and personal information controlled through secure authentication?",
+                        "Are login attempt limitations enforced?",
+                    ],
+                    RelatedRegulations=[
+                        "Personal Information Protection Act, Article 29",
+                        "Standards for Ensuring the Safety of Personal Information, Article 5",
+                    ],
+                    AuditEvidence=[
+                        "Login screen for information systems",
+                        "Login failure message screen",
+                    ],
+                    NonComplianceCases=[
+                        "Case 1: Insufficient authentication when accessing information systems externally.",
+                        "Case 2: No limitation on login failure attempts.",
+                    ],
+                )
+            ],
+            Checks=[
+                "cloudwatch_log_metric_filter_authentication_failures",
+                "cognito_user_pool_mfa_enabled",
+            ],
+        ),
+        Compliance_Requirement(
+            Id="2.5.4",
+            Name="User Authentication",
+            Description="User access to information systems",
+            Attributes=[
+                KISA_ISMSP_Requirement_Attribute(
+                    Domain="2. Protection Measure Requirements",
+                    Subdomain="2.5. Authentication and Authorization Management",
+                    Section="2.5.3 User Authentication",
+                    AuditChecklist=[
+                        "Is access to information systems and personal information controlled through secure authentication?",
+                        "Are login attempt limitations enforced?",
+                    ],
+                    RelatedRegulations=[
+                        "Personal Information Protection Act, Article 29",
+                        "Standards for Ensuring the Safety of Personal Information, Article 5",
+                    ],
+                    AuditEvidence=[
+                        "Login screen for information systems",
+                        "Login failure message screen",
+                    ],
+                    NonComplianceCases=[
+                        "Case 1: Insufficient authentication when accessing information systems externally.",
+                        "Case 2: No limitation on login failure attempts.",
+                    ],
                 )
             ],
             Checks=[],

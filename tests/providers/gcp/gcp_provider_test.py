@@ -1,7 +1,8 @@
 from argparse import Namespace
 from datetime import datetime
-from os import environ, rmdir
+from os import environ
 
+import pytest
 from freezegun import freeze_time
 from mock import MagicMock, patch
 
@@ -10,9 +11,14 @@ from prowler.config.config import (
     default_fixer_config_file_path,
     load_and_validate_config_file,
 )
+from prowler.providers.common.models import Connection
+from prowler.providers.gcp.exceptions.exceptions import (
+    GCPInvalidProviderIdError,
+    GCPNoAccesibleProjectsError,
+    GCPTestConnectionError,
+)
 from prowler.providers.gcp.gcp_provider import GcpProvider
-from prowler.providers.gcp.models import GCPIdentityInfo, GCPOutputOptions, GCPProject
-from tests.providers.gcp.gcp_fixtures import mock_api_client
+from prowler.providers.gcp.models import GCPIdentityInfo, GCPOrganization, GCPProject
 
 
 class TestGCPProvider:
@@ -22,10 +28,12 @@ class TestGCPProvider:
         list_project_id = False
         credentials_file = ""
         impersonate_service_account = ""
-        audit_config = load_and_validate_config_file("gcp", default_config_file_path)
         fixer_config = load_and_validate_config_file(
             "gcp", default_fixer_config_file_path
         )
+        client_id = "test-client-id"
+        client_secret = "test-client-secret"
+        refresh_token = "test-refresh-token"
 
         projects = {
             "test-project": GCPProject(
@@ -33,7 +41,7 @@ class TestGCPProvider:
                 id="project/55555555",
                 name="test-project",
                 labels={"test": "value"},
-                lifecycle_state="",
+                lifecycle_state="ACTIVE",
             )
         }
 
@@ -45,7 +53,7 @@ class TestGCPProvider:
 
         with patch(
             "prowler.providers.gcp.gcp_provider.GcpProvider.setup_session",
-            return_value=None,
+            return_value=(None, "test-project"),
         ), patch(
             "prowler.providers.gcp.gcp_provider.GcpProvider.get_projects",
             return_value=projects,
@@ -62,113 +70,25 @@ class TestGCPProvider:
                 credentials_file,
                 impersonate_service_account,
                 list_project_id,
-                audit_config=audit_config,
+                config_path=default_config_file_path,
                 fixer_config=fixer_config,
+                client_id=client_id,
+                client_secret=client_secret,
+                refresh_token=refresh_token,
             )
             assert gcp_provider.session is None
             assert gcp_provider.project_ids == ["test-project"]
             assert gcp_provider.projects == projects
+            assert gcp_provider.default_project_id == "test-project"
             assert gcp_provider.identity == GCPIdentityInfo(profile="default")
             assert gcp_provider.audit_config == {"shodan_api_key": None}
-
-    @freeze_time(datetime.today())
-    def test_gcp_provider_output_options(self):
-        arguments = Namespace()
-        arguments.project_id = []
-        arguments.excluded_project_id = []
-        arguments.list_project_id = False
-        arguments.credentials_file = ""
-        arguments.impersonate_service_account = ""
-        arguments.config_file = default_config_file_path
-        arguments.fixer_config = default_fixer_config_file_path
-
-        # Output options
-        arguments.status = []
-        arguments.output_formats = ["csv"]
-        arguments.output_directory = "output_test_directory"
-        arguments.verbose = True
-        arguments.only_logs = False
-        arguments.unix_timestamp = False
-        arguments.shodan = "test-api-key"
-
-        projects = {
-            "test-project": GCPProject(
-                number="55555555",
-                id="project/55555555",
-                name="test-project",
-                labels={"test": "value"},
-                lifecycle_state="",
-            )
-        }
-
-        mocked_service = MagicMock()
-
-        mocked_service.projects.list.return_value = MagicMock(
-            execute=MagicMock(return_value={"projects": projects})
-        )
-        with patch(
-            "prowler.providers.gcp.gcp_provider.GcpProvider.setup_session",
-            return_value=None,
-        ), patch(
-            "prowler.providers.gcp.gcp_provider.GcpProvider.get_projects",
-            return_value=projects,
-        ), patch(
-            "prowler.providers.gcp.gcp_provider.GcpProvider.update_projects_with_organizations",
-            return_value=None,
-        ), patch(
-            "prowler.providers.gcp.gcp_provider.discovery.build",
-            new=mock_api_client,
-        ), patch(
-            "prowler.providers.gcp.gcp_provider.discovery.build",
-            return_value=mocked_service,
-        ):
-            gcp_provider = GcpProvider(
-                arguments.project_id,
-                arguments.excluded_project_id,
-                arguments.credentials_file,
-                arguments.impersonate_service_account,
-                arguments.list_project_id,
-                arguments.config_file,
-                arguments.fixer_config,
-            )
-            # This is needed since the output_options requires to get the global provider to get the audit config
-            with patch(
-                "prowler.providers.common.provider.Provider.get_global_provider",
-                return_value=gcp_provider,
-            ):
-                gcp_provider.output_options = arguments, {}
-
-                assert isinstance(gcp_provider.output_options, GCPOutputOptions)
-                assert gcp_provider.output_options.status == []
-                assert gcp_provider.output_options.output_modes == [
-                    "csv",
-                ]
-                assert (
-                    gcp_provider.output_options.output_directory
-                    == arguments.output_directory
-                )
-                assert gcp_provider.output_options.bulk_checks_metadata == {}
-                assert gcp_provider.output_options.verbose
-                assert (
-                    f"prowler-output-{gcp_provider.identity.profile}"
-                    in gcp_provider.output_options.output_filename
-                )
-                # Flaky due to the millisecond part of the timestamp
-                # assert (
-                #     gcp_provider.output_options.output_filename
-                #     == f"prowler-output-{gcp_provider.identity.profile}-{datetime.today().strftime('%Y%m%d%H%M%S')}"
-                # )
-
-                # Delete testing directory
-                # TODO: move this to a fixtures file
-                rmdir(f"{arguments.output_directory}/compliance")
-                rmdir(arguments.output_directory)
 
     @freeze_time(datetime.today())
     def test_is_project_matching(self):
         arguments = Namespace()
         arguments.project_id = []
         arguments.excluded_project_id = []
+        arguments.organization_id = None
         arguments.list_project_id = False
         arguments.credentials_file = ""
         arguments.impersonate_service_account = ""
@@ -190,7 +110,7 @@ class TestGCPProvider:
                 id="project/55555555",
                 name="test-project",
                 labels={"test": "value"},
-                lifecycle_state="",
+                lifecycle_state="ACTIVE",
             )
         }
 
@@ -201,7 +121,7 @@ class TestGCPProvider:
         )
         with patch(
             "prowler.providers.gcp.gcp_provider.GcpProvider.setup_session",
-            return_value=None,
+            return_value=(None, None),
         ), patch(
             "prowler.providers.gcp.gcp_provider.GcpProvider.get_projects",
             return_value=projects,
@@ -213,6 +133,7 @@ class TestGCPProvider:
             return_value=mocked_service,
         ):
             gcp_provider = GcpProvider(
+                arguments.organization_id,
                 arguments.project_id,
                 arguments.excluded_project_id,
                 arguments.credentials_file,
@@ -220,6 +141,9 @@ class TestGCPProvider:
                 arguments.list_project_id,
                 arguments.config_file,
                 arguments.fixer_config,
+                client_id="test-client-id",
+                client_secret="test-client-secret",
+                refresh_token="test-refresh-token",
             )
 
             input_project = "sys-*"
@@ -247,6 +171,7 @@ class TestGCPProvider:
         arguments = Namespace()
         arguments.project_id = []
         arguments.excluded_project_id = []
+        arguments.organization_id = None
         arguments.list_project_id = False
         arguments.credentials_file = "test_credentials_file"
         arguments.impersonate_service_account = ""
@@ -259,7 +184,7 @@ class TestGCPProvider:
                 id="project/55555555",
                 name="test-project",
                 labels={"test": "value"},
-                lifecycle_state="",
+                lifecycle_state="ACTIVE",
             )
         }
 
@@ -285,6 +210,7 @@ class TestGCPProvider:
             return_value=mocked_service,
         ):
             gcp_provider = GcpProvider(
+                arguments.organization_id,
                 arguments.project_id,
                 arguments.excluded_project_id,
                 arguments.credentials_file,
@@ -292,6 +218,9 @@ class TestGCPProvider:
                 arguments.list_project_id,
                 arguments.config_file,
                 arguments.fixer_config,
+                client_id=None,
+                client_secret=None,
+                refresh_token=None,
             )
             assert environ["GOOGLE_APPLICATION_CREDENTIALS"] == "test_credentials_file"
             assert gcp_provider.session is not None
@@ -306,6 +235,7 @@ class TestGCPProvider:
         arguments = Namespace()
         arguments.project_id = []
         arguments.excluded_project_id = []
+        arguments.organization_id = None
         arguments.list_project_id = False
         arguments.credentials_file = "test_credentials_file"
         arguments.impersonate_service_account = "test-impersonate-service-account"
@@ -318,7 +248,7 @@ class TestGCPProvider:
                 id="project/55555555",
                 name="test-project",
                 labels={"test": "value"},
-                lifecycle_state="",
+                lifecycle_state="ACTIVE",
             )
         }
 
@@ -344,6 +274,7 @@ class TestGCPProvider:
             return_value=mocked_service,
         ):
             gcp_provider = GcpProvider(
+                arguments.organization_id,
                 arguments.project_id,
                 arguments.excluded_project_id,
                 arguments.credentials_file,
@@ -351,6 +282,9 @@ class TestGCPProvider:
                 arguments.list_project_id,
                 arguments.config_file,
                 arguments.fixer_config,
+                client_id=None,
+                client_secret=None,
+                refresh_token=None,
             )
             assert environ["GOOGLE_APPLICATION_CREDENTIALS"] == "test_credentials_file"
             assert gcp_provider.session is not None
@@ -364,7 +298,7 @@ class TestGCPProvider:
                 == "test-impersonate-service-account"
             )
 
-    def test_print_credentials_default_options(self, capsys):
+    def test_setup_session_with_organization_id(self):
         mocked_credentials = MagicMock()
 
         mocked_credentials.refresh.return_value = None
@@ -373,6 +307,7 @@ class TestGCPProvider:
         arguments = Namespace()
         arguments.project_id = []
         arguments.excluded_project_id = []
+        arguments.organization_id = "test-organization-id"
         arguments.list_project_id = False
         arguments.credentials_file = "test_credentials_file"
         arguments.impersonate_service_account = ""
@@ -385,7 +320,12 @@ class TestGCPProvider:
                 id="project/55555555",
                 name="test-project",
                 labels={"test": "value"},
-                lifecycle_state="",
+                lifecycle_state="ACTIVE",
+                organization=GCPOrganization(
+                    id="test-organization-id",
+                    name="test-organization",
+                    display_name="Test Organization",
+                ),
             )
         }
 
@@ -411,6 +351,7 @@ class TestGCPProvider:
             return_value=mocked_service,
         ):
             gcp_provider = GcpProvider(
+                arguments.organization_id,
                 arguments.project_id,
                 arguments.excluded_project_id,
                 arguments.credentials_file,
@@ -418,6 +359,139 @@ class TestGCPProvider:
                 arguments.list_project_id,
                 arguments.config_file,
                 arguments.fixer_config,
+                client_id=None,
+                client_secret=None,
+                refresh_token=None,
+            )
+            assert environ["GOOGLE_APPLICATION_CREDENTIALS"] == "test_credentials_file"
+            assert gcp_provider.session is not None
+            assert (
+                gcp_provider.projects["test-project"].organization.id
+                == "test-organization-id"
+            )
+
+    def test_setup_session_with_inactive_project(self):
+        mocked_credentials = MagicMock()
+
+        mocked_credentials.refresh.return_value = None
+        mocked_credentials._service_account_email = "test-service-account-email"
+
+        arguments = Namespace()
+        arguments.project_id = ["project/55555555"]
+        arguments.excluded_project_id = []
+        arguments.organization_id = None
+        arguments.list_project_id = False
+        arguments.credentials_file = "test_credentials_file"
+        arguments.impersonate_service_account = ""
+        arguments.config_file = default_config_file_path
+        arguments.fixer_config = default_fixer_config_file_path
+
+        projects = {
+            "test-project": GCPProject(
+                number="55555555",
+                id="project/55555555",
+                name="test-project",
+                labels={"test": "value"},
+                lifecycle_state="DELETE_REQUESTED",
+            )
+        }
+
+        mocked_service = MagicMock()
+
+        mocked_service.projects.list.return_value = MagicMock(
+            execute=MagicMock(return_value={"projects": projects})
+        )
+        with patch(
+            "prowler.providers.gcp.gcp_provider.GcpProvider.get_projects",
+            return_value=projects,
+        ), patch(
+            "prowler.providers.gcp.gcp_provider.GcpProvider.update_projects_with_organizations",
+            return_value=None,
+        ), patch(
+            "os.path.abspath",
+            return_value="test_credentials_file",
+        ), patch(
+            "prowler.providers.gcp.gcp_provider.default",
+            return_value=(mocked_credentials, MagicMock()),
+        ), patch(
+            "prowler.providers.gcp.gcp_provider.discovery.build",
+            return_value=mocked_service,
+        ):
+            with pytest.raises(Exception) as e:
+                GcpProvider(
+                    arguments.organization_id,
+                    arguments.project_id,
+                    arguments.excluded_project_id,
+                    arguments.credentials_file,
+                    arguments.impersonate_service_account,
+                    arguments.list_project_id,
+                    arguments.config_file,
+                    arguments.fixer_config,
+                    client_id=None,
+                    client_secret=None,
+                    refresh_token=None,
+                )
+            assert e.type == GCPNoAccesibleProjectsError
+
+    def test_print_credentials_default_options(self, capsys):
+        mocked_credentials = MagicMock()
+
+        mocked_credentials.refresh.return_value = None
+        mocked_credentials._service_account_email = "test-service-account-email"
+
+        arguments = Namespace()
+        arguments.project_id = []
+        arguments.excluded_project_id = []
+        arguments.organization_id = None
+        arguments.list_project_id = False
+        arguments.credentials_file = "test_credentials_file"
+        arguments.impersonate_service_account = ""
+        arguments.config_file = default_config_file_path
+        arguments.fixer_config = default_fixer_config_file_path
+
+        projects = {
+            "test-project": GCPProject(
+                number="55555555",
+                id="project/55555555",
+                name="test-project",
+                labels={"test": "value"},
+                lifecycle_state="ACTIVE",
+            )
+        }
+
+        mocked_service = MagicMock()
+
+        mocked_service.projects.list.return_value = MagicMock(
+            execute=MagicMock(return_value={"projects": projects})
+        )
+        with patch(
+            "prowler.providers.gcp.gcp_provider.GcpProvider.get_projects",
+            return_value=projects,
+        ), patch(
+            "prowler.providers.gcp.gcp_provider.GcpProvider.update_projects_with_organizations",
+            return_value=None,
+        ), patch(
+            "os.path.abspath",
+            return_value="test_credentials_file",
+        ), patch(
+            "prowler.providers.gcp.gcp_provider.default",
+            return_value=(mocked_credentials, MagicMock()),
+        ), patch(
+            "prowler.providers.gcp.gcp_provider.discovery.build",
+            return_value=mocked_service,
+        ):
+            gcp_provider = GcpProvider(
+                arguments.organization_id,
+                arguments.project_id,
+                arguments.excluded_project_id,
+                arguments.credentials_file,
+                arguments.impersonate_service_account,
+                arguments.list_project_id,
+                arguments.config_file,
+                arguments.fixer_config,
+                client_id=None,
+                client_secret=None,
+                refresh_token=None,
             )
             gcp_provider.print_credentials()
             captured = capsys.readouterr()
@@ -439,6 +513,7 @@ class TestGCPProvider:
         arguments = Namespace()
         arguments.project_id = []
         arguments.excluded_project_id = []
+        arguments.organization_id = None
         arguments.list_project_id = False
         arguments.credentials_file = "test_credentials_file"
         arguments.impersonate_service_account = "test-impersonate-service-account"
@@ -451,7 +526,7 @@ class TestGCPProvider:
                 id="project/55555555",
                 name="test-project",
                 labels={"test": "value"},
-                lifecycle_state="",
+                lifecycle_state="ACTIVE",
             )
         }
 
@@ -477,6 +552,7 @@ class TestGCPProvider:
             return_value=mocked_service,
         ):
             gcp_provider = GcpProvider(
+                arguments.organization_id,
                 arguments.project_id,
                 arguments.excluded_project_id,
                 arguments.credentials_file,
@@ -484,6 +560,9 @@ class TestGCPProvider:
                 arguments.list_project_id,
                 arguments.config_file,
                 arguments.fixer_config,
+                client_id=None,
+                client_secret=None,
+                refresh_token=None,
             )
             gcp_provider.print_credentials()
             captured = capsys.readouterr()
@@ -505,6 +584,7 @@ class TestGCPProvider:
         arguments = Namespace()
         arguments.project_id = []
         arguments.excluded_project_id = ["test-excluded-project"]
+        arguments.organization_id = None
         arguments.list_project_id = False
         arguments.credentials_file = "test_credentials_file"
         arguments.impersonate_service_account = ""
@@ -517,14 +597,14 @@ class TestGCPProvider:
                 id="project/55555555",
                 name="test-project",
                 labels={"test": "value"},
-                lifecycle_state="",
+                lifecycle_state="ACTIVE",
             ),
             "test-excluded-project": GCPProject(
                 number="12345678",
                 id="project/12345678",
                 name="test-excluded-project",
                 labels={"test": "value"},
-                lifecycle_state="",
+                lifecycle_state="ACTIVE",
             ),
         }
 
@@ -551,6 +631,7 @@ class TestGCPProvider:
             return_value=mocked_service,
         ):
             gcp_provider = GcpProvider(
+                arguments.organization_id,
                 arguments.project_id,
                 arguments.excluded_project_id,
                 arguments.credentials_file,
@@ -558,6 +639,9 @@ class TestGCPProvider:
                 arguments.list_project_id,
                 arguments.config_file,
                 arguments.fixer_config,
+                client_id=None,
+                client_secret=None,
+                refresh_token=None,
             )
             gcp_provider.print_credentials()
             captured = capsys.readouterr()
@@ -572,3 +656,100 @@ class TestGCPProvider:
                 "Excluded GCP Project IDs:" in captured.out
                 and "test-excluded-project" in captured.out
             )
+
+    def test_init_only_client_id(self):
+        with pytest.raises(Exception) as e:
+            GcpProvider(client_id="test-client-id")
+        assert "client_secret and refresh_token are required" in e.value.args[0]
+
+    def test_validate_static_arguments(self):
+        output = GcpProvider.validate_static_arguments(
+            client_id="test-client-id",
+            client_secret="test-client-secret",
+            refresh_token="test-refresh-token",
+        )
+
+        assert output == {
+            "client_id": "test-client-id",
+            "client_secret": "test-client-secret",
+            "refresh_token": "test-refresh-token",
+            "type": "authorized_user",
+        }
+
+    def test_test_connection_with_exception(self):
+        with patch(
+            "prowler.providers.gcp.gcp_provider.GcpProvider.setup_session",
+            side_effect=Exception("Test exception"),
+        ):
+            with pytest.raises(Exception) as e:
+                GcpProvider.test_connection(
+                    client_id="test-client-id",
+                    client_secret="test-client-secret",
+                    refresh_token="test-refresh-token",
+                )
+            assert e.type == GCPTestConnectionError
+            assert "Test exception" in e.value.args[0]
+
+    def test_test_connection_valid_project_id(self):
+        project_id = "test-project-id"
+        mocked_service = MagicMock()
+
+        mocked_service.projects.get.return_value = MagicMock(
+            execute=MagicMock(return_value={"projectId": project_id})
+        )
+
+        with patch(
+            "prowler.providers.gcp.gcp_provider.GcpProvider.setup_session",
+            return_value=(None, project_id),
+        ), patch(
+            "prowler.providers.gcp.gcp_provider.discovery.build",
+            return_value=mocked_service,
+        ):
+            output = GcpProvider.test_connection(
+                client_id="test-client-id",
+                client_secret="test-client-secret",
+                refresh_token="test-refresh-token",
+                provider_id=project_id,
+            )
+            assert Connection(is_connected=True, error=None) == output
+
+    def test_test_connection_invalid_project_id(self):
+        mocked_service = MagicMock()
+
+        projects = {
+            "test-valid-project": GCPProject(
+                number="55555555",
+                id="project/55555555",
+                name="test-project",
+                labels={"test": "value"},
+                lifecycle_state="ACTIVE",
+            ),
+        }
+
+        mocked_service.projects.get.return_value = MagicMock(
+            execute=MagicMock(return_value={"projects": projects})
+        )
+
+        with patch(
+            "prowler.providers.gcp.gcp_provider.GcpProvider.setup_session",
+            return_value=(None, "test-valid-project"),
+        ), patch(
+            "prowler.providers.gcp.gcp_provider.discovery.build",
+            return_value=mocked_service,
+        ), patch(
+            "prowler.providers.gcp.gcp_provider.GcpProvider.validate_project_id"
+        ) as mock_validate_project_id:
+
+            mock_validate_project_id.side_effect = GCPInvalidProviderIdError(
+                "Invalid project ID"
+            )
+
+            with pytest.raises(Exception) as e:
+                GcpProvider.test_connection(
+                    client_id="test-client-id",
+                    client_secret="test-client-secret",
+                    refresh_token="test-refresh-token",
+                    provider_id="test-invalid-project",
+                )
+
+            assert e.type == GCPInvalidProviderIdError

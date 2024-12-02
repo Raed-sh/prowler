@@ -2,28 +2,21 @@ import json
 import os
 import re
 import tempfile
-from argparse import Namespace
 from datetime import datetime, timedelta
 from json import dumps
-from os import rmdir
 from re import search
 from unittest import mock
 
 import botocore
 import botocore.exceptions
+import pytest
 from boto3 import client, resource, session
-from freezegun import freeze_time
 from mock import patch
 from moto import mock_aws
 from pytest import raises
 from tzlocal import get_localzone
 
-from prowler.config.config import load_and_validate_config_file
-from prowler.providers.aws.aws_provider import (
-    AwsProvider,
-    get_aws_available_regions,
-    get_aws_region_for_sts,
-)
+from prowler.providers.aws.aws_provider import AwsProvider, get_aws_region_for_sts
 from prowler.providers.aws.config import (
     AWS_STS_GLOBAL_ENDPOINT_REGION,
     BOTO3_USER_AGENT_EXTRA,
@@ -31,7 +24,9 @@ from prowler.providers.aws.config import (
 )
 from prowler.providers.aws.exceptions.exceptions import (
     AWSArgumentTypeValidationError,
-    AWSIAMRoleARNInvalidResourceType,
+    AWSIAMRoleARNInvalidResourceTypeError,
+    AWSInvalidPartitionError,
+    AWSInvalidProviderIdError,
     AWSNoCredentialsError,
 )
 from prowler.providers.aws.lib.arn.models import ARN
@@ -42,7 +37,6 @@ from prowler.providers.aws.models import (
     AWSCredentials,
     AWSMFAInfo,
     AWSOrganizationsInfo,
-    AWSOutputOptions,
 )
 from prowler.providers.common.models import Connection
 from prowler.providers.common.provider import Provider
@@ -261,8 +255,74 @@ class TestAWSProvider:
 
         assert aws_provider.type == "aws"
         assert aws_provider.scan_unused_services is True
-        assert aws_provider.audit_config == {}
+        assert aws_provider.audit_config
         assert aws_provider.session.current_session.region_name == AWS_REGION_US_EAST_1
+
+    @mock_aws
+    def test_aws_provider_with_static_credentials(self):
+        # Create a mock IAM user
+        iam_client = client("iam", region_name=AWS_REGION_EU_WEST_1)
+        username = "test-user"
+        iam_user = iam_client.create_user(UserName=username)["User"]
+        # Create a mock IAM access keys
+        access_key = iam_client.create_access_key(UserName=iam_user["UserName"])[
+            "AccessKey"
+        ]
+
+        credentials = {
+            "aws_access_key_id": access_key["AccessKeyId"],
+            "aws_secret_access_key": access_key["SecretAccessKey"],
+        }
+
+        aws_provider = AwsProvider(**credentials)
+        assert aws_provider.type == "aws"
+        # Session
+        assert aws_provider.session.current_session.region_name == AWS_REGION_US_EAST_1
+        assert aws_provider.session.current_session.profile_name == "default"
+        assert aws_provider.session.original_session.region_name == AWS_REGION_US_EAST_1
+        assert aws_provider.session.original_session.profile_name == "default"
+
+        # Identity
+        assert aws_provider.identity.account == AWS_ACCOUNT_NUMBER
+        assert aws_provider.identity.account_arn == AWS_ACCOUNT_ARN
+        assert (
+            aws_provider.identity.identity_arn
+            == f"arn:aws:iam::{AWS_ACCOUNT_NUMBER}:user/{username}"
+        )
+        assert aws_provider.identity.partition == AWS_COMMERCIAL_PARTITION
+        assert aws_provider.identity.profile is None
+        assert aws_provider.identity.profile_region == AWS_REGION_US_EAST_1
+
+    @mock_aws
+    def test_aws_provider_with_session_credentials(self):
+        sts_client = client("sts", region_name=AWS_REGION_EU_WEST_1)
+        session_token = sts_client.get_session_token()
+
+        session_credentials = {
+            "aws_access_key_id": session_token["Credentials"]["AccessKeyId"],
+            "aws_secret_access_key": session_token["Credentials"]["SecretAccessKey"],
+            "aws_session_token": session_token["Credentials"]["SessionToken"],
+        }
+
+        aws_provider = AwsProvider(**session_credentials)
+        assert aws_provider.type == "aws"
+        # Session
+        assert aws_provider.session.current_session.region_name == AWS_REGION_US_EAST_1
+        assert aws_provider.session.current_session.profile_name == "default"
+        assert aws_provider.session.original_session.region_name == AWS_REGION_US_EAST_1
+        assert aws_provider.session.original_session.profile_name == "default"
+
+        # Identity
+        assert aws_provider.identity.account == AWS_ACCOUNT_NUMBER
+        assert aws_provider.identity.account_arn == AWS_ACCOUNT_ARN
+        # moto is the default user created by moto
+        assert (
+            aws_provider.identity.identity_arn
+            == f"arn:aws:sts::{AWS_ACCOUNT_NUMBER}:user/moto"
+        )
+        assert aws_provider.identity.partition == AWS_COMMERCIAL_PARTITION
+        assert aws_provider.identity.profile is None
+        assert aws_provider.identity.profile_region == AWS_REGION_US_EAST_1
 
     @mock_aws
     def test_aws_provider_organizations_delegated_administrator(self):
@@ -388,30 +448,14 @@ class TestAWSProvider:
             aws_provider = AwsProvider(mfa=mfa)
 
             assert aws_provider.type == "aws"
-            assert aws_provider.scan_unused_services is None
-            assert aws_provider.audit_config == {}
+            assert aws_provider.scan_unused_services is False
+            assert aws_provider.audit_config != {}
             assert (
                 aws_provider.session.current_session.region_name == AWS_REGION_US_EAST_1
             )
             assert (
                 aws_provider.session.current_session.region_name == AWS_REGION_US_EAST_1
             )
-
-    @mock_aws
-    def test_aws_provider_get_output_mapping(self):
-        aws_provider = AwsProvider()
-
-        assert aws_provider.get_output_mapping == {
-            "auth_method": "identity.profile",
-            "provider": "type",
-            "account_uid": "identity.account",
-            "account_name": "organizations_metadata.account_name",
-            "account_email": "organizations_metadata.account_email",
-            "account_organization_uid": "organizations_metadata.organization_arn",
-            "account_organization_name": "organizations_metadata.organization_id",
-            "account_tags": "organizations_metadata.account_tags",
-            "partition": "identity.partition",
-        }
 
     @mock_aws
     def test_aws_provider_assume_role_with_mfa(self):
@@ -588,9 +632,8 @@ aws:
         config_file_input.write(bytes(config, encoding="raw_unicode_escape"))
         config_file_input.close()
         config_file_input = config_file_input.name
-        audit_config = load_and_validate_config_file("aws", config_file_input)
         aws_provider = AwsProvider(
-            audit_config=audit_config,
+            config_path=config_file_input,
         )
 
         os.remove(config_file_input)
@@ -625,9 +668,7 @@ aws:
         with open(mutelist_file.name, "w") as mutelist_file:
             mutelist_file.write(json.dumps(mutelist, indent=4))
 
-        aws_provider = AwsProvider()
-
-        aws_provider.mutelist = mutelist_file.name
+        aws_provider = AwsProvider(mutelist_path=mutelist_file.name)
 
         os.remove(mutelist_file.name)
 
@@ -637,13 +678,12 @@ aws:
 
     @mock_aws
     def test_aws_provider_mutelist_none(self):
-        aws_provider = AwsProvider()
 
         with patch(
             "prowler.providers.aws.aws_provider.get_default_mute_file_path",
             return_value=None,
         ):
-            aws_provider.mutelist = None
+            aws_provider = AwsProvider(mutelist_path=None)
 
         assert isinstance(aws_provider.mutelist, AWSMutelist)
         assert aws_provider.mutelist.mutelist == {}
@@ -691,9 +731,8 @@ aws:
             )
         )
 
-        aws_provider = AwsProvider()
+        aws_provider = AwsProvider(mutelist_path=mutelist_bucket_object_uri)
 
-        aws_provider.mutelist = mutelist_bucket_object_uri
         os.remove(mutelist_file.name)
 
         assert isinstance(aws_provider.mutelist, AWSMutelist)
@@ -731,7 +770,7 @@ aws:
             "prowler.providers.aws.lib.mutelist.mutelist.AWSMutelist.get_mutelist_file_from_lambda",
             return_value=mutelist["Mutelist"],
         ):
-            aws_provider.mutelist = lambda_mutelist_path
+            aws_provider = AwsProvider(mutelist_path=lambda_mutelist_path)
 
         assert isinstance(aws_provider.mutelist, AWSMutelist)
         assert aws_provider.mutelist.mutelist == mutelist["Mutelist"]
@@ -768,7 +807,7 @@ aws:
             "prowler.providers.aws.lib.mutelist.mutelist.AWSMutelist.get_mutelist_file_from_dynamodb",
             return_value=mutelist["Mutelist"],
         ):
-            aws_provider.mutelist = dynamodb_mutelist_path
+            aws_provider = AwsProvider(mutelist_path=dynamodb_mutelist_path)
 
         assert isinstance(aws_provider.mutelist, AWSMutelist)
         assert aws_provider.mutelist.mutelist == mutelist["Mutelist"]
@@ -937,9 +976,9 @@ aws:
                 }
             },
         ):
-            assert aws_provider.get_available_aws_service_regions("ec2") == {
-                AWS_REGION_US_EAST_1
-            }
+            assert aws_provider.get_available_aws_service_regions(
+                "ec2", "aws", {AWS_REGION_US_EAST_1}
+            ) == {AWS_REGION_US_EAST_1}
 
     @mock_aws
     def test_get_available_aws_service_regions_with_all_regions_audited(self):
@@ -976,7 +1015,9 @@ aws:
                 }
             },
         ):
-            assert len(aws_provider.get_available_aws_service_regions("ec2")) == 17
+            assert (
+                len(aws_provider.get_available_aws_service_regions("ec2", "aws")) == 17
+            )
 
     @mock_aws
     def test_get_tagged_resources(self):
@@ -1001,11 +1042,11 @@ aws:
             ],
         )
         instance_id = instances["Instances"][0]["InstanceId"]
-        instance_arn = f"arn:aws:ec2:{AWS_REGION_EU_CENTRAL_1}::instance/{instance_id}"
+        instance_arn = f"arn:aws:ec2:{AWS_REGION_EU_CENTRAL_1}:{AWS_ACCOUNT_NUMBER}:ec2:instance/{instance_id}"
         image_id = ec2_client.create_image(Name="testami", InstanceId=instance_id)[
             "ImageId"
         ]
-        image_arn = f"arn:aws:ec2:{AWS_REGION_EU_CENTRAL_1}::image/{image_id}"
+        image_arn = f"arn:aws:ec2:{AWS_REGION_EU_CENTRAL_1}:{AWS_ACCOUNT_NUMBER}:ec2:image/{image_id}"
         ec2_client.create_tags(
             Resources=[image_id], Tags=[{"Key": "ami", "Value": "test"}]
         )
@@ -1037,97 +1078,6 @@ aws:
         )
 
         assert aws_provider.audit_resources == [AWS_ACCOUNT_ARN]
-
-    @mock_aws
-    @freeze_time(datetime.today())
-    def test_set_provider_output_options_aws_no_output_filename(self):
-        arguments = Namespace()
-        arguments.status = ["FAIL"]
-        arguments.output_formats = ["csv"]
-        arguments.output_directory = "output_test_directory"
-        arguments.verbose = True
-        arguments.security_hub = True
-        arguments.shodan = "test-api-key"
-        arguments.only_logs = False
-        arguments.unix_timestamp = False
-        arguments.send_sh_only_fails = True
-
-        aws_provider = AwsProvider()
-        # This is needed since the output_options requires to get the global provider to get the audit config
-        with patch(
-            "prowler.providers.common.provider.Provider.get_global_provider",
-            return_value=aws_provider,
-        ):
-
-            aws_provider.output_options = arguments, {}
-
-            assert isinstance(aws_provider.output_options, AWSOutputOptions)
-            assert aws_provider.output_options.security_hub_enabled
-            assert aws_provider.output_options.send_sh_only_fails
-            assert aws_provider.output_options.status == ["FAIL"]
-            assert aws_provider.output_options.output_modes == ["csv", "json-asff"]
-            assert (
-                aws_provider.output_options.output_directory
-                == arguments.output_directory
-            )
-            assert aws_provider.output_options.bulk_checks_metadata == {}
-            assert aws_provider.output_options.verbose
-            assert (
-                f"prowler-output-{AWS_ACCOUNT_NUMBER}"
-                in aws_provider.output_options.output_filename
-            )
-            # Flaky due to the millisecond part of the timestamp
-            # assert (
-            #     aws_provider.output_options.output_filename
-            #     == f"prowler-output-{AWS_ACCOUNT_NUMBER}-{datetime.today().strftime('%Y%m%d%H%M%S')}"
-            # )
-
-            # Delete testing directory
-            rmdir(f"{arguments.output_directory}/compliance")
-            rmdir(arguments.output_directory)
-
-    @mock_aws
-    @freeze_time(datetime.today())
-    def test_set_provider_output_options_aws(self):
-        arguments = Namespace()
-        arguments.status = []
-        arguments.output_formats = ["csv"]
-        arguments.output_directory = "output_test_directory"
-        arguments.verbose = True
-        arguments.output_filename = "output_test_filename"
-        arguments.security_hub = True
-        arguments.shodan = "test-api-key"
-        arguments.only_logs = False
-        arguments.unix_timestamp = False
-        arguments.send_sh_only_fails = True
-
-        aws_provider = AwsProvider()
-        # This is needed since the output_options requires to get the global provider to get the audit config
-        with patch(
-            "prowler.providers.common.provider.Provider.get_global_provider",
-            return_value=aws_provider,
-        ):
-
-            aws_provider.output_options = arguments, {}
-
-            assert isinstance(aws_provider.output_options, AWSOutputOptions)
-            assert aws_provider.output_options.security_hub_enabled
-            assert aws_provider.output_options.send_sh_only_fails
-            assert aws_provider.output_options.status == []
-            assert aws_provider.output_options.output_modes == ["csv", "json-asff"]
-            assert (
-                aws_provider.output_options.output_directory
-                == arguments.output_directory
-            )
-            assert aws_provider.output_options.bulk_checks_metadata == {}
-            assert aws_provider.output_options.verbose
-            assert (
-                aws_provider.output_options.output_filename == arguments.output_filename
-            )
-
-            # Delete testing directory
-            rmdir(f"{arguments.output_directory}/compliance")
-            rmdir(arguments.output_directory)
 
     @mock_aws
     def test_validate_credentials_commercial_partition_with_regions(self):
@@ -1293,7 +1243,7 @@ aws:
                 )  # No profile to avoid ProfileNotFound error
 
             assert exception.type == AWSNoCredentialsError
-            assert "AWSNoCredentialsError[1904]: No AWS credentials found" in str(
+            assert "AWSNoCredentialsError[1002]: No AWS credentials found" in str(
                 exception.value
             )
 
@@ -1335,7 +1285,7 @@ aws:
         assert exception.type == AWSArgumentTypeValidationError
         assert (
             exception.value.args[0]
-            == "[1905] Session Duration must be between 900 and 43200 seconds."
+            == "[1003] Session Duration must be between 900 and 43200 seconds."
         )
 
     @mock_aws
@@ -1355,7 +1305,7 @@ aws:
         assert isinstance(connection.error, AWSArgumentTypeValidationError)
         assert (
             connection.error.args[0]
-            == "[1905] Session Duration must be between 900 and 43200 seconds."
+            == "[1003] Session Duration must be between 900 and 43200 seconds."
         )
 
     @mock_aws
@@ -1371,7 +1321,7 @@ aws:
         assert exception.type == AWSArgumentTypeValidationError
         assert (
             exception.value.args[0]
-            == "[1905] Role Session Name must be between 2 and 64 characters and may contain alphanumeric characters, periods, hyphens, and underscores."
+            == "[1003] Role Session Name must be between 2 and 64 characters and may contain alphanumeric characters, periods, hyphens, and underscores."
         )
 
     @mock_aws
@@ -1379,14 +1329,129 @@ aws:
         role_name = "test-role"
         role_arn = f"arn:{AWS_COMMERCIAL_PARTITION}:iam::{AWS_ACCOUNT_NUMBER}:not-role/{role_name}"
 
-        with raises(AWSIAMRoleARNInvalidResourceType) as exception:
+        with raises(AWSIAMRoleARNInvalidResourceTypeError) as exception:
             AwsProvider.test_connection(role_arn=role_arn)
 
-        assert exception.type == AWSIAMRoleARNInvalidResourceType
+        assert exception.type == AWSIAMRoleARNInvalidResourceTypeError
         assert (
             exception.value.args[0]
-            == "[1912] AWS IAM Role ARN resource type is invalid"
+            == "[1010] AWS IAM Role ARN resource type is invalid"
         )
+
+    @mock_aws
+    def test_test_connection_with_static_credentials(self):
+        # Create a mock IAM user
+        iam_client = client("iam", region_name=AWS_REGION_EU_WEST_1)
+        username = "test-user"
+        iam_user = iam_client.create_user(UserName=username)["User"]
+        # Create a mock IAM access keys
+        access_key = iam_client.create_access_key(UserName=iam_user["UserName"])[
+            "AccessKey"
+        ]
+
+        credentials = {
+            "aws_access_key_id": access_key["AccessKeyId"],
+            "aws_secret_access_key": access_key["SecretAccessKey"],
+        }
+
+        connection = AwsProvider.test_connection(**credentials)
+
+        assert isinstance(connection, Connection)
+        assert connection.is_connected
+        assert connection.error is None
+
+    @mock_aws
+    def test_test_connection_with_session_credentials(self):
+        sts_client = client("sts", region_name=AWS_REGION_EU_WEST_1)
+        session_token = sts_client.get_session_token()
+
+        session_credentials = {
+            "aws_access_key_id": session_token["Credentials"]["AccessKeyId"],
+            "aws_secret_access_key": session_token["Credentials"]["SecretAccessKey"],
+            "aws_session_token": session_token["Credentials"]["SessionToken"],
+        }
+
+        connection = AwsProvider.test_connection(**session_credentials)
+
+        assert isinstance(connection, Connection)
+        assert connection.is_connected
+        assert connection.error is None
+
+    @mock_aws
+    def test_test_connection_with_own_account(self):
+        sts_client = client("sts", region_name=AWS_REGION_EU_WEST_1)
+        session_token = sts_client.get_session_token()
+
+        session_credentials = {
+            "aws_access_key_id": session_token["Credentials"]["AccessKeyId"],
+            "aws_secret_access_key": session_token["Credentials"]["SecretAccessKey"],
+            "aws_session_token": session_token["Credentials"]["SessionToken"],
+            "provider_id": AWS_ACCOUNT_NUMBER,
+        }
+
+        connection = AwsProvider.test_connection(**session_credentials)
+
+        assert isinstance(connection, Connection)
+        assert connection.is_connected
+        assert connection.error is None
+
+    @mock_aws
+    def test_test_connection_with_different_account(self):
+        sts_client = client("sts", region_name=AWS_REGION_EU_WEST_1)
+        session_token = sts_client.get_session_token()
+
+        session_credentials = {
+            "aws_access_key_id": session_token["Credentials"]["AccessKeyId"],
+            "aws_secret_access_key": session_token["Credentials"]["SecretAccessKey"],
+            "aws_session_token": session_token["Credentials"]["SessionToken"],
+            "provider_id": "111122223333",
+        }
+
+        with raises(AWSInvalidProviderIdError) as exception:
+            AwsProvider.test_connection(**session_credentials)
+
+        assert exception.type == AWSInvalidProviderIdError
+        assert (
+            exception.value.args[0]
+            == "[1015] The provided AWS credentials belong to a different account"
+        )
+
+    @mock_aws
+    def test_test_connection_with_different_account_dont_raise(self):
+        sts_client = client("sts", region_name=AWS_REGION_EU_WEST_1)
+        session_token = sts_client.get_session_token()
+
+        session_credentials = {
+            "aws_access_key_id": session_token["Credentials"]["AccessKeyId"],
+            "aws_secret_access_key": session_token["Credentials"]["SecretAccessKey"],
+            "aws_session_token": session_token["Credentials"]["SessionToken"],
+            "provider_id": "111122223333",
+        }
+
+        connection = AwsProvider.test_connection(
+            **session_credentials, raise_on_exception=False
+        )
+
+        assert isinstance(connection, Connection)
+        assert not connection.is_connected
+        assert isinstance(connection.error, AWSInvalidProviderIdError)
+        assert (
+            connection.error.message
+            == "The provided AWS credentials belong to a different account"
+        )
+        assert connection.error.code == 1015
+
+    @mock_aws
+    def test_test_connection_generic_exception(self):
+        with patch(
+            "prowler.providers.aws.aws_provider.AwsProvider.setup_session",
+            side_effect=Exception(),
+        ):
+            connection = AwsProvider.test_connection(raise_on_exception=False)
+
+        assert isinstance(connection, Connection)
+        assert not connection.is_connected
+        assert isinstance(connection.error, Exception)
 
     @mock_aws
     def test_create_sts_session(self):
@@ -1653,7 +1718,16 @@ aws:
         )
         assert not recovered_regions
 
-    def test_get_aws_available_regions(self):
+    def test_get_regions_all_count(self):
+        assert len(AwsProvider.get_regions(partition=None)) == 34
+
+    def test_get_regions_cn_count(self):
+        assert len(AwsProvider.get_regions("aws-cn")) == 2
+
+    def test_get_regions_aws_count(self):
+        assert len(AwsProvider.get_regions(partition="aws")) == 30
+
+    def test_get_all_regions(self):
         with patch(
             "prowler.providers.aws.aws_provider.read_aws_regions_file",
             return_value={
@@ -1674,11 +1748,114 @@ aws:
                 }
             },
         ):
-            assert get_aws_available_regions() == {
+            assert AwsProvider.get_regions(partition=None) == {
                 "af-south-1",
                 "cn-north-1",
                 "us-gov-west-1",
             }
+
+    def test_get_regions_with_us_gov_partition(self):
+        with patch(
+            "prowler.providers.aws.aws_provider.read_aws_regions_file",
+            return_value={
+                "services": {
+                    "acm": {
+                        "regions": {
+                            "aws": [
+                                "af-south-1",
+                            ],
+                            "aws-cn": [
+                                "cn-north-1",
+                            ],
+                            "aws-us-gov": [
+                                "us-gov-west-1",
+                            ],
+                        }
+                    }
+                }
+            },
+        ):
+            assert AwsProvider.get_regions("aws-us-gov") == {
+                "us-gov-west-1",
+            }
+
+    def test_get_regions_with_aws_partition(self):
+        with patch(
+            "prowler.providers.aws.aws_provider.read_aws_regions_file",
+            return_value={
+                "services": {
+                    "acm": {
+                        "regions": {
+                            "aws": [
+                                "af-south-1",
+                            ],
+                            "aws-cn": [
+                                "cn-north-1",
+                            ],
+                            "aws-us-gov": [
+                                "us-gov-west-1",
+                            ],
+                        }
+                    }
+                }
+            },
+        ):
+            assert AwsProvider.get_regions("aws") == {
+                "af-south-1",
+            }
+
+    def test_get_regions_with_cn_partition(self):
+        with patch(
+            "prowler.providers.aws.aws_provider.read_aws_regions_file",
+            return_value={
+                "services": {
+                    "acm": {
+                        "regions": {
+                            "aws": [
+                                "af-south-1",
+                            ],
+                            "aws-cn": [
+                                "cn-north-1",
+                            ],
+                            "aws-us-gov": [
+                                "us-gov-west-1",
+                            ],
+                        }
+                    }
+                }
+            },
+        ):
+            assert AwsProvider.get_regions("aws-cn") == {
+                "cn-north-1",
+            }
+
+    def test_get_regions_with_unknown_partition(self):
+        with patch(
+            "prowler.providers.aws.aws_provider.read_aws_regions_file",
+            return_value={
+                "services": {
+                    "acm": {
+                        "regions": {
+                            "aws": [
+                                "af-south-1",
+                            ],
+                            "aws-cn": [
+                                "cn-north-1",
+                            ],
+                            "aws-us-gov": [
+                                "us-gov-west-1",
+                            ],
+                        }
+                    }
+                }
+            },
+        ):
+            partition = "unknown"
+            with pytest.raises(AWSInvalidPartitionError) as exception:
+                AwsProvider.get_regions(partition)
+
+            assert exception.type == AWSInvalidPartitionError
+        assert f"Invalid partition: {partition}" in exception.value.args[0]
 
     def test_get_aws_region_for_sts_input_regions_none_session_region_none(self):
         input_regions = None
