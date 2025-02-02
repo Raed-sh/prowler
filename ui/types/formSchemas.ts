@@ -1,5 +1,29 @@
 import { z } from "zod";
 
+export const addRoleFormSchema = z.object({
+  name: z.string().min(1, "Name is required"),
+  manage_users: z.boolean().default(false),
+  manage_account: z.boolean().default(false),
+  manage_billing: z.boolean().default(false),
+  manage_providers: z.boolean().default(false),
+  // manage_integrations: z.boolean().default(false),
+  manage_scans: z.boolean().default(false),
+  unlimited_visibility: z.boolean().default(false),
+  groups: z.array(z.string()).optional(),
+});
+
+export const editRoleFormSchema = z.object({
+  name: z.string().min(1, "Name is required"),
+  manage_users: z.boolean().default(false),
+  manage_account: z.boolean().default(false),
+  manage_billing: z.boolean().default(false),
+  manage_providers: z.boolean().default(false),
+  // manage_integrations: z.boolean().default(false),
+  manage_scans: z.boolean().default(false),
+  unlimited_visibility: z.boolean().default(false),
+  groups: z.array(z.string()).optional(),
+});
+
 export const editScanFormSchema = (currentName: string) =>
   z.object({
     scanName: z
@@ -109,17 +133,28 @@ export const addCredentialsFormSchema = (providerType: string) =>
 
 export const addCredentialsRoleFormSchema = (providerType: string) =>
   providerType === "aws"
-    ? z.object({
-        providerId: z.string(),
-        providerType: z.string(),
-        role_arn: z.string().optional(),
-        aws_access_key_id: z.string().optional(),
-        aws_secret_access_key: z.string().optional(),
-        aws_session_token: z.string().optional(),
-        session_duration: z.number().optional(),
-        external_id: z.string().optional(),
-        role_session_name: z.string().optional(),
-      })
+    ? z
+        .object({
+          providerId: z.string(),
+          providerType: z.string(),
+          role_arn: z.string().optional(),
+          external_id: z.string().optional(),
+          aws_access_key_id: z.string().optional(),
+          aws_secret_access_key: z.string().optional(),
+          aws_session_token: z.string().optional(),
+          session_duration: z.number().optional(),
+          role_session_name: z.string().optional(),
+          credentials_type: z.string().optional(),
+        })
+        .refine(
+          (data) =>
+            data.credentials_type !== "access-secret-key" ||
+            (data.aws_access_key_id && data.aws_secret_access_key),
+          {
+            message: "AWS Access Key ID and Secret Access Key are required.",
+            path: ["aws_access_key_id"],
+          },
+        )
     : z.object({
         providerId: z.string(),
         providerType: z.string(),
@@ -158,38 +193,25 @@ export const editInviteFormSchema = z.object({
   invitationId: z.string().uuid(),
   invitationEmail: z.string().email(),
   expires_at: z.string().optional(),
+  role: z.string().optional(),
 });
 
-export const editUserFormSchema = (
-  currentName: string,
-  currentEmail: string,
-  currentCompanyName: string,
-) =>
+export const editUserFormSchema = () =>
   z.object({
     name: z
       .string()
       .min(3, { message: "The name must have at least 3 characters." })
       .max(150, { message: "The name cannot exceed 150 characters." })
-      .refine((val) => val !== currentName, {
-        message: "The new name must be different from the current one.",
-      })
       .optional(),
     email: z
       .string()
       .email({ message: "Please enter a valid email address." })
-      .refine((val) => val !== currentEmail, {
-        message: "The new email must be different from the current one.",
-      })
       .optional(),
     password: z
       .string()
       .min(1, { message: "The password cannot be empty." })
       .optional(),
-    company_name: z
-      .string()
-      .refine((val) => val !== currentCompanyName, {
-        message: "The new company name must be different from the current one.",
-      })
-      .optional(),
+    company_name: z.string().optional(),
     userId: z.string(),
+    role: z.string().optional(),
   });

@@ -17,6 +17,7 @@ from api.models import (
     ComplianceOverview,
     Finding,
     Invitation,
+    InvitationRoleRelationship,
     Membership,
     Provider,
     ProviderGroup,
@@ -24,10 +25,13 @@ from api.models import (
     ProviderSecret,
     Resource,
     ResourceTag,
+    Role,
+    RoleProviderGroupRelationship,
     Scan,
     StateChoices,
     Task,
     User,
+    UserRoleRelationship,
 )
 from api.rls import Tenant
 
@@ -176,10 +180,26 @@ class UserSerializer(BaseSerializerV1):
     """
 
     memberships = serializers.ResourceRelatedField(many=True, read_only=True)
+    roles = serializers.ResourceRelatedField(many=True, read_only=True)
 
     class Meta:
         model = User
-        fields = ["id", "name", "email", "company_name", "date_joined", "memberships"]
+        fields = [
+            "id",
+            "name",
+            "email",
+            "company_name",
+            "date_joined",
+            "memberships",
+            "roles",
+        ]
+        extra_kwargs = {
+            "roles": {"read_only": True},
+        }
+
+    included_serializers = {
+        "roles": "api.v1.serializers.RoleSerializer",
+    }
 
 
 class UserCreateSerializer(BaseWriteSerializer):
@@ -233,6 +253,73 @@ class UserUpdateSerializer(BaseWriteSerializer):
             validate_password(password, user=instance)
             instance.set_password(password)
         return super().update(instance, validated_data)
+
+
+class RoleResourceIdentifierSerializer(serializers.Serializer):
+    resource_type = serializers.CharField(source="type")
+    id = serializers.UUIDField()
+
+    class JSONAPIMeta:
+        resource_name = "role-identifier"
+
+    def to_representation(self, instance):
+        """
+        Ensure 'type' is used in the output instead of 'resource_type'.
+        """
+        representation = super().to_representation(instance)
+        representation["type"] = representation.pop("resource_type", None)
+        return representation
+
+    def to_internal_value(self, data):
+        """
+        Map 'type' back to 'resource_type' during input.
+        """
+        data["resource_type"] = data.pop("type", None)
+        return super().to_internal_value(data)
+
+
+class UserRoleRelationshipSerializer(RLSSerializer, BaseWriteSerializer):
+    """
+    Serializer for modifying user memberships
+    """
+
+    roles = serializers.ListField(
+        child=RoleResourceIdentifierSerializer(),
+        help_text="List of resource identifier objects representing roles.",
+    )
+
+    def create(self, validated_data):
+        role_ids = [item["id"] for item in validated_data["roles"]]
+        roles = Role.objects.filter(id__in=role_ids)
+        tenant_id = self.context.get("tenant_id")
+
+        new_relationships = [
+            UserRoleRelationship(
+                user=self.context.get("user"), role=r, tenant_id=tenant_id
+            )
+            for r in roles
+        ]
+        UserRoleRelationship.objects.bulk_create(new_relationships)
+
+        return self.context.get("user")
+
+    def update(self, instance, validated_data):
+        role_ids = [item["id"] for item in validated_data["roles"]]
+        roles = Role.objects.filter(id__in=role_ids)
+        tenant_id = self.context.get("tenant_id")
+
+        instance.roles.clear()
+        new_relationships = [
+            UserRoleRelationship(user=instance, role=r, tenant_id=tenant_id)
+            for r in roles
+        ]
+        UserRoleRelationship.objects.bulk_create(new_relationships)
+
+        return instance
+
+    class Meta:
+        model = UserRoleRelationship
+        fields = ["id", "roles"]
 
 
 # Tasks
@@ -358,89 +445,199 @@ class MembershipSerializer(serializers.ModelSerializer):
 
 # Provider Groups
 class ProviderGroupSerializer(RLSSerializer, BaseWriteSerializer):
-    providers = serializers.ResourceRelatedField(many=True, read_only=True)
+    providers = serializers.ResourceRelatedField(
+        queryset=Provider.objects.all(), many=True, required=False
+    )
+    roles = serializers.ResourceRelatedField(
+        queryset=Role.objects.all(), many=True, required=False
+    )
 
     def validate(self, attrs):
-        tenant = self.context["tenant_id"]
-        name = attrs.get("name", self.instance.name if self.instance else None)
-
-        # Exclude the current instance when checking for uniqueness during updates
-        queryset = ProviderGroup.objects.filter(tenant=tenant, name=name)
-        if self.instance:
-            queryset = queryset.exclude(pk=self.instance.pk)
-
-        if queryset.exists():
+        if ProviderGroup.objects.filter(name=attrs.get("name")).exists():
             raise serializers.ValidationError(
-                {
-                    "name": "A provider group with this name already exists for this tenant."
-                }
+                {"name": "A provider group with this name already exists."}
             )
 
         return super().validate(attrs)
 
     class Meta:
         model = ProviderGroup
-        fields = ["id", "name", "inserted_at", "updated_at", "providers", "url"]
-        read_only_fields = ["id", "inserted_at", "updated_at"]
+        fields = [
+            "id",
+            "name",
+            "inserted_at",
+            "updated_at",
+            "providers",
+            "roles",
+            "url",
+        ]
         extra_kwargs = {
             "id": {"read_only": True},
             "inserted_at": {"read_only": True},
             "updated_at": {"read_only": True},
+            "roles": {"read_only": True},
+            "url": {"read_only": True},
         }
 
 
-class ProviderGroupIncludedSerializer(RLSSerializer, BaseWriteSerializer):
+class ProviderGroupIncludedSerializer(ProviderGroupSerializer):
     class Meta:
         model = ProviderGroup
         fields = ["id", "name"]
 
 
-class ProviderGroupUpdateSerializer(RLSSerializer, BaseWriteSerializer):
-    """
-    Serializer for updating the ProviderGroup model.
-    Only allows "name" field to be updated.
-    """
-
-    class Meta:
-        model = ProviderGroup
-        fields = ["id", "name"]
-
-
-class ProviderGroupMembershipUpdateSerializer(RLSSerializer, BaseWriteSerializer):
-    """
-    Serializer for modifying provider group memberships
-    """
-
-    provider_ids = serializers.ListField(
-        child=serializers.UUIDField(),
-        help_text="List of provider UUIDs to add to the group",
+class ProviderGroupCreateSerializer(ProviderGroupSerializer):
+    providers = serializers.ResourceRelatedField(
+        queryset=Provider.objects.all(), many=True, required=False
+    )
+    roles = serializers.ResourceRelatedField(
+        queryset=Role.objects.all(), many=True, required=False
     )
 
-    def validate(self, attrs):
-        tenant_id = self.context["tenant_id"]
-        provider_ids = attrs.get("provider_ids", [])
+    class Meta:
+        model = ProviderGroup
+        fields = [
+            "id",
+            "name",
+            "inserted_at",
+            "updated_at",
+            "providers",
+            "roles",
+        ]
 
-        existing_provider_ids = set(
-            Provider.objects.filter(
-                id__in=provider_ids, tenant_id=tenant_id
-            ).values_list("id", flat=True)
+    def create(self, validated_data):
+        providers = validated_data.pop("providers", [])
+        roles = validated_data.pop("roles", [])
+        tenant_id = self.context.get("tenant_id")
+        provider_group = ProviderGroup.objects.create(
+            tenant_id=tenant_id, **validated_data
         )
-        provided_provider_ids = set(provider_ids)
 
-        missing_provider_ids = provided_provider_ids - existing_provider_ids
-
-        if missing_provider_ids:
-            raise serializers.ValidationError(
-                {
-                    "provider_ids": f"The following provider IDs do not exist: {', '.join(str(id) for id in missing_provider_ids)}"
-                }
+        through_model_instances = [
+            ProviderGroupMembership(
+                provider_group=provider_group,
+                provider=provider,
+                tenant_id=tenant_id,
             )
+            for provider in providers
+        ]
+        ProviderGroupMembership.objects.bulk_create(through_model_instances)
 
-        return super().validate(attrs)
+        through_model_instances = [
+            RoleProviderGroupRelationship(
+                provider_group=provider_group,
+                role=role,
+                tenant_id=tenant_id,
+            )
+            for role in roles
+        ]
+        RoleProviderGroupRelationship.objects.bulk_create(through_model_instances)
+
+        return provider_group
+
+
+class ProviderGroupUpdateSerializer(ProviderGroupSerializer):
+    def update(self, instance, validated_data):
+        tenant_id = self.context.get("tenant_id")
+
+        if "providers" in validated_data:
+            providers = validated_data.pop("providers")
+            instance.providers.clear()
+            through_model_instances = [
+                ProviderGroupMembership(
+                    provider_group=instance,
+                    provider=provider,
+                    tenant_id=tenant_id,
+                )
+                for provider in providers
+            ]
+            ProviderGroupMembership.objects.bulk_create(through_model_instances)
+
+        if "roles" in validated_data:
+            roles = validated_data.pop("roles")
+            instance.roles.clear()
+            through_model_instances = [
+                RoleProviderGroupRelationship(
+                    provider_group=instance,
+                    role=role,
+                    tenant_id=tenant_id,
+                )
+                for role in roles
+            ]
+            RoleProviderGroupRelationship.objects.bulk_create(through_model_instances)
+
+        return super().update(instance, validated_data)
+
+
+class ProviderResourceIdentifierSerializer(serializers.Serializer):
+    resource_type = serializers.CharField(source="type")
+    id = serializers.UUIDField()
+
+    class JSONAPIMeta:
+        resource_name = "provider-identifier"
+
+    def to_representation(self, instance):
+        """
+        Ensure 'type' is used in the output instead of 'resource_type'.
+        """
+        representation = super().to_representation(instance)
+        representation["type"] = representation.pop("resource_type", None)
+        return representation
+
+    def to_internal_value(self, data):
+        """
+        Map 'type' back to 'resource_type' during input.
+        """
+        data["resource_type"] = data.pop("type", None)
+        return super().to_internal_value(data)
+
+
+class ProviderGroupMembershipSerializer(RLSSerializer, BaseWriteSerializer):
+    """
+    Serializer for modifying provider_group memberships
+    """
+
+    providers = serializers.ListField(
+        child=ProviderResourceIdentifierSerializer(),
+        help_text="List of resource identifier objects representing providers.",
+    )
+
+    def create(self, validated_data):
+        provider_ids = [item["id"] for item in validated_data["providers"]]
+        providers = Provider.objects.filter(id__in=provider_ids)
+        tenant_id = self.context.get("tenant_id")
+
+        new_relationships = [
+            ProviderGroupMembership(
+                provider_group=self.context.get("provider_group"),
+                provider=p,
+                tenant_id=tenant_id,
+            )
+            for p in providers
+        ]
+        ProviderGroupMembership.objects.bulk_create(new_relationships)
+
+        return self.context.get("provider_group")
+
+    def update(self, instance, validated_data):
+        provider_ids = [item["id"] for item in validated_data["providers"]]
+        providers = Provider.objects.filter(id__in=provider_ids)
+        tenant_id = self.context.get("tenant_id")
+
+        instance.providers.clear()
+        new_relationships = [
+            ProviderGroupMembership(
+                provider_group=instance, provider=p, tenant_id=tenant_id
+            )
+            for p in providers
+        ]
+        ProviderGroupMembership.objects.bulk_create(new_relationships)
+
+        return instance
 
     class Meta:
         model = ProviderGroupMembership
-        fields = ["id", "provider_ids"]
+        fields = ["id", "providers"]
 
 
 # Providers
@@ -677,7 +874,7 @@ class ResourceSerializer(RLSSerializer):
         }
     )
     def get_tags(self, obj):
-        return obj.get_tags()
+        return obj.get_tags(self.context.get("tenant_id"))
 
     def get_fields(self):
         """`type` is a Python reserved keyword."""
@@ -708,6 +905,7 @@ class FindingSerializer(RLSSerializer):
             "raw_result",
             "inserted_at",
             "updated_at",
+            "first_seen_at",
             "url",
             # Relationships
             "scan",
@@ -720,12 +918,26 @@ class FindingSerializer(RLSSerializer):
     }
 
 
+# To be removed when the related endpoint is removed as well
 class FindingDynamicFilterSerializer(serializers.Serializer):
     services = serializers.ListField(child=serializers.CharField(), allow_empty=True)
     regions = serializers.ListField(child=serializers.CharField(), allow_empty=True)
 
     class Meta:
         resource_name = "finding-dynamic-filters"
+
+
+class FindingMetadataSerializer(serializers.Serializer):
+    services = serializers.ListField(child=serializers.CharField(), allow_empty=True)
+    regions = serializers.ListField(child=serializers.CharField(), allow_empty=True)
+    resource_types = serializers.ListField(
+        child=serializers.CharField(), allow_empty=True
+    )
+    # Temporarily disabled until we implement tag filtering in the UI
+    # tags = serializers.JSONField(help_text="Tags are described as key-value pairs.")
+
+    class Meta:
+        resource_name = "findings-metadata"
 
 
 # Provider secrets
@@ -800,7 +1012,7 @@ class KubernetesProviderSecret(serializers.Serializer):
 
 class AWSRoleAssumptionProviderSecret(serializers.Serializer):
     role_arn = serializers.CharField()
-    external_id = serializers.CharField(required=False)
+    external_id = serializers.CharField()
     role_session_name = serializers.CharField(required=False)
     session_duration = serializers.IntegerField(
         required=False, min_value=900, max_value=43200
@@ -847,6 +1059,10 @@ class AWSRoleAssumptionProviderSecret(serializers.Serializer):
                         "description": "The Amazon Resource Name (ARN) of the role to assume. Required for AWS role "
                         "assumption.",
                     },
+                    "external_id": {
+                        "type": "string",
+                        "description": "An identifier to enhance security for role assumption.",
+                    },
                     "aws_access_key_id": {
                         "type": "string",
                         "description": "The AWS access key ID. Only required if the environment lacks pre-configured "
@@ -868,11 +1084,6 @@ class AWSRoleAssumptionProviderSecret(serializers.Serializer):
                         "default": 3600,
                         "description": "The duration (in seconds) for the role session.",
                     },
-                    "external_id": {
-                        "type": "string",
-                        "description": "An optional identifier to enhance security for role assumption; may be "
-                        "required by the role administrator.",
-                    },
                     "role_session_name": {
                         "type": "string",
                         "description": "An identifier for the role session, useful for tracking sessions in AWS logs. "
@@ -886,7 +1097,7 @@ class AWSRoleAssumptionProviderSecret(serializers.Serializer):
                         "pattern": "^[a-zA-Z0-9=,.@_-]+$",
                     },
                 },
-                "required": ["role_arn"],
+                "required": ["role_arn", "external_id"],
             },
             {
                 "type": "object",
@@ -1034,6 +1245,14 @@ class InvitationSerializer(RLSSerializer):
     Serializer for the Invitation model.
     """
 
+    roles = serializers.ResourceRelatedField(many=True, queryset=Role.objects.all())
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        tenant_id = self.context.get("tenant_id")
+        if tenant_id is not None:
+            self.fields["roles"].queryset = Role.objects.filter(tenant_id=tenant_id)
+
     class Meta:
         model = Invitation
         fields = [
@@ -1043,6 +1262,7 @@ class InvitationSerializer(RLSSerializer):
             "email",
             "state",
             "token",
+            "roles",
             "expires_at",
             "inviter",
             "url",
@@ -1050,6 +1270,14 @@ class InvitationSerializer(RLSSerializer):
 
 
 class InvitationBaseWriteSerializer(BaseWriteSerializer):
+    roles = serializers.ResourceRelatedField(many=True, queryset=Role.objects.all())
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        tenant_id = self.context.get("tenant_id")
+        if tenant_id is not None:
+            self.fields["roles"].queryset = Role.objects.filter(tenant_id=tenant_id)
+
     def validate_email(self, value):
         user = User.objects.filter(email=value).first()
         tenant_id = self.context["tenant_id"]
@@ -1086,30 +1314,61 @@ class InvitationCreateSerializer(InvitationBaseWriteSerializer, RLSSerializer):
 
     class Meta:
         model = Invitation
-        fields = ["email", "expires_at", "state", "token", "inviter"]
+        fields = ["email", "expires_at", "state", "token", "inviter", "roles"]
         extra_kwargs = {
             "token": {"read_only": True},
             "state": {"read_only": True},
             "inviter": {"read_only": True},
             "expires_at": {"required": False},
+            "roles": {"required": False},
         }
 
     def create(self, validated_data):
         inviter = self.context.get("request").user
+        tenant_id = self.context.get("tenant_id")
         validated_data["inviter"] = inviter
-        return super().create(validated_data)
+        roles = validated_data.pop("roles", [])
+        invitation = super().create(validated_data)
+        for role in roles:
+            InvitationRoleRelationship.objects.create(
+                role=role, invitation=invitation, tenant_id=tenant_id
+            )
+
+        return invitation
 
 
 class InvitationUpdateSerializer(InvitationBaseWriteSerializer):
+    roles = serializers.ResourceRelatedField(
+        required=False, many=True, queryset=Role.objects.all()
+    )
+
     class Meta:
         model = Invitation
-        fields = ["id", "email", "expires_at", "state", "token"]
+        fields = ["id", "email", "expires_at", "state", "token", "roles"]
         extra_kwargs = {
             "token": {"read_only": True},
             "state": {"read_only": True},
             "expires_at": {"required": False},
             "email": {"required": False},
+            "roles": {"required": False},
         }
+
+    def update(self, instance, validated_data):
+        tenant_id = self.context.get("tenant_id")
+        if "roles" in validated_data:
+            roles = validated_data.pop("roles")
+            instance.roles.clear()
+            new_relationships = [
+                InvitationRoleRelationship(
+                    role=r, invitation=instance, tenant_id=tenant_id
+                )
+                for r in roles
+            ]
+            InvitationRoleRelationship.objects.bulk_create(new_relationships)
+
+        invitation = super().update(instance, validated_data)
+
+        return invitation
 
 
 class InvitationAcceptSerializer(RLSSerializer):
@@ -1120,6 +1379,218 @@ class InvitationAcceptSerializer(RLSSerializer):
     class Meta:
         model = Invitation
         fields = ["invitation_token"]
+
+
+# Roles
+
+
+class RoleSerializer(RLSSerializer, BaseWriteSerializer):
+    permission_state = serializers.SerializerMethodField()
+    users = serializers.ResourceRelatedField(
+        queryset=User.objects.all(), many=True, required=False
+    )
+    provider_groups = serializers.ResourceRelatedField(
+        queryset=ProviderGroup.objects.all(), many=True, required=False
+    )
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        tenant_id = self.context.get("tenant_id")
+        if tenant_id is not None:
+            self.fields["users"].queryset = User.objects.filter(
+                membership__tenant__id=tenant_id
+            )
+            self.fields["provider_groups"].queryset = ProviderGroup.objects.filter(
+                tenant_id=self.context.get("tenant_id")
+            )
+
+    def get_permission_state(self, obj) -> str:
+        return obj.permission_state
+
+    def validate(self, attrs):
+        if Role.objects.filter(name=attrs.get("name")).exists():
+            raise serializers.ValidationError(
+                {"name": "A role with this name already exists."}
+            )
+
+        if attrs.get("manage_providers"):
+            attrs["unlimited_visibility"] = True
+
+        # Prevent updates to the admin role
+        if getattr(self.instance, "name", None) == "admin":
+            raise serializers.ValidationError(
+                {"name": "The admin role cannot be updated."}
+            )
+
+        return super().validate(attrs)
+
+    class Meta:
+        model = Role
+        fields = [
+            "id",
+            "name",
+            "manage_users",
+            "manage_account",
+            # Disable for the first release
+            # "manage_billing",
+            # "manage_integrations",
+            # /Disable for the first release
+            "manage_providers",
+            "manage_scans",
+            "permission_state",
+            "unlimited_visibility",
+            "inserted_at",
+            "updated_at",
+            "provider_groups",
+            "users",
+            "invitations",
+            "url",
+        ]
+        extra_kwargs = {
+            "id": {"read_only": True},
+            "inserted_at": {"read_only": True},
+            "updated_at": {"read_only": True},
+            "url": {"read_only": True},
+        }
+
+
+class RoleCreateSerializer(RoleSerializer):
+    provider_groups = serializers.ResourceRelatedField(
+        many=True, queryset=ProviderGroup.objects.all(), required=False
+    )
+    users = serializers.ResourceRelatedField(
+        many=True, queryset=User.objects.all(), required=False
+    )
+
+    def create(self, validated_data):
+        provider_groups = validated_data.pop("provider_groups", [])
+        users = validated_data.pop("users", [])
+        tenant_id = self.context.get("tenant_id")
+        role = Role.objects.create(tenant_id=tenant_id, **validated_data)
+
+        through_model_instances = [
+            RoleProviderGroupRelationship(
+                role=role,
+                provider_group=provider_group,
+                tenant_id=tenant_id,
+            )
+            for provider_group in provider_groups
+        ]
+        RoleProviderGroupRelationship.objects.bulk_create(through_model_instances)
+
+        through_model_instances = [
+            UserRoleRelationship(
+                role=role,
+                user=user,
+                tenant_id=tenant_id,
+            )
+            for user in users
+        ]
+        UserRoleRelationship.objects.bulk_create(through_model_instances)
+
+        return role
+
+
+class RoleUpdateSerializer(RoleSerializer):
+    def update(self, instance, validated_data):
+        tenant_id = self.context.get("tenant_id")
+
+        if "provider_groups" in validated_data:
+            provider_groups = validated_data.pop("provider_groups")
+            instance.provider_groups.clear()
+            through_model_instances = [
+                RoleProviderGroupRelationship(
+                    role=instance,
+                    provider_group=provider_group,
+                    tenant_id=tenant_id,
+                )
+                for provider_group in provider_groups
+            ]
+            RoleProviderGroupRelationship.objects.bulk_create(through_model_instances)
+
+        if "users" in validated_data:
+            users = validated_data.pop("users")
+            instance.users.clear()
+            through_model_instances = [
+                UserRoleRelationship(
+                    role=instance,
+                    user=user,
+                    tenant_id=tenant_id,
+                )
+                for user in users
+            ]
+            UserRoleRelationship.objects.bulk_create(through_model_instances)
+
+        return super().update(instance, validated_data)
+
+
+class ProviderGroupResourceIdentifierSerializer(serializers.Serializer):
+    resource_type = serializers.CharField(source="type")
+    id = serializers.UUIDField()
+
+    class JSONAPIMeta:
+        resource_name = "provider-group-identifier"
+
+    def to_representation(self, instance):
+        """
+        Ensure 'type' is used in the output instead of 'resource_type'.
+        """
+        representation = super().to_representation(instance)
+        representation["type"] = representation.pop("resource_type", None)
+        return representation
+
+    def to_internal_value(self, data):
+        """
+        Map 'type' back to 'resource_type' during input.
+        """
+        data["resource_type"] = data.pop("type", None)
+        return super().to_internal_value(data)
+
+
+class RoleProviderGroupRelationshipSerializer(RLSSerializer, BaseWriteSerializer):
+    """
+    Serializer for modifying role memberships
+    """
+
+    provider_groups = serializers.ListField(
+        child=ProviderGroupResourceIdentifierSerializer(),
+        help_text="List of resource identifier objects representing provider groups.",
+    )
+
+    def create(self, validated_data):
+        provider_group_ids = [item["id"] for item in validated_data["provider_groups"]]
+        provider_groups = ProviderGroup.objects.filter(id__in=provider_group_ids)
+        tenant_id = self.context.get("tenant_id")
+
+        new_relationships = [
+            RoleProviderGroupRelationship(
+                role=self.context.get("role"), provider_group=pg, tenant_id=tenant_id
+            )
+            for pg in provider_groups
+        ]
+        RoleProviderGroupRelationship.objects.bulk_create(new_relationships)
+
+        return self.context.get("role")
+
+    def update(self, instance, validated_data):
+        provider_group_ids = [item["id"] for item in validated_data["provider_groups"]]
+        provider_groups = ProviderGroup.objects.filter(id__in=provider_group_ids)
+        tenant_id = self.context.get("tenant_id")
+
+        instance.provider_groups.clear()
+        new_relationships = [
+            RoleProviderGroupRelationship(
+                role=instance, provider_group=pg, tenant_id=tenant_id
+            )
+            for pg in provider_groups
+        ]
+        RoleProviderGroupRelationship.objects.bulk_create(new_relationships)
+
+        return instance
+
+    class Meta:
+        model = RoleProviderGroupRelationship
+        fields = ["id", "provider_groups"]
 
 
 # Compliance overview
@@ -1265,7 +1736,7 @@ class OverviewProviderSerializer(serializers.Serializer):
             "properties": {
                 "pass": {"type": "integer"},
                 "fail": {"type": "integer"},
-                "manual": {"type": "integer"},
+                "muted": {"type": "integer"},
                 "total": {"type": "integer"},
             },
         }
@@ -1274,7 +1745,7 @@ class OverviewProviderSerializer(serializers.Serializer):
         return {
             "pass": obj["findings_passed"],
             "fail": obj["findings_failed"],
-            "manual": obj["findings_manual"],
+            "muted": obj["findings_muted"],
             "total": obj["total_findings"],
         }
 
@@ -1329,6 +1800,24 @@ class OverviewSeveritySerializer(serializers.Serializer):
 
     class JSONAPIMeta:
         resource_name = "findings-severity-overview"
+
+    def get_root_meta(self, _resource, _many):
+        return {"version": "v1"}
+
+
+class OverviewServiceSerializer(serializers.Serializer):
+    id = serializers.CharField(source="service")
+    total = serializers.IntegerField()
+    _pass = serializers.IntegerField()
+    fail = serializers.IntegerField()
+    muted = serializers.IntegerField()
+
+    class JSONAPIMeta:
+        resource_name = "services-overview"
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields["pass"] = self.fields.pop("_pass")
 
     def get_root_meta(self, _resource, _many):
         return {"version": "v1"}

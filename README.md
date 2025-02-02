@@ -3,7 +3,7 @@
   <img align="center" src="https://github.com/prowler-cloud/prowler/blob/master/docs/img/prowler-logo-white.png#gh-dark-mode-only" width="50%" height="50%">
 </p>
 <p align="center">
-  <b><i>Prowler SaaS </b> and <b>Prowler Open Source</b> are as dynamic and adaptable as the environment they’re meant to protect. Trusted by the leaders in security.
+  <b><i>Prowler Open Source</b> is as dynamic and adaptable as the environment they’re meant to protect. Trusted by the leaders in security.
 </p>
 <p align="center">
 <b>Learn more at <a href="https://prowler.com">prowler.com</i></b>
@@ -29,7 +29,7 @@
 <p align="center">
   <a href="https://github.com/prowler-cloud/prowler"><img alt="Repo size" src="https://img.shields.io/github/repo-size/prowler-cloud/prowler"></a>
   <a href="https://github.com/prowler-cloud/prowler/issues"><img alt="Issues" src="https://img.shields.io/github/issues/prowler-cloud/prowler"></a>
-  <a href="https://github.com/prowler-cloud/prowler/releases"><img alt="Version" src="https://img.shields.io/github/v/release/prowler-cloud/prowler?include_prereleases"></a>
+  <a href="https://github.com/prowler-cloud/prowler/releases"><img alt="Version" src="https://img.shields.io/github/v/release/prowler-cloud/prowler"></a>
   <a href="https://github.com/prowler-cloud/prowler/releases"><img alt="Version" src="https://img.shields.io/github/release-date/prowler-cloud/prowler"></a>
   <a href="https://github.com/prowler-cloud/prowler"><img alt="Contributors" src="https://img.shields.io/github/contributors-anon/prowler-cloud/prowler"></a>
   <a href="https://github.com/prowler-cloud/prowler"><img alt="License" src="https://img.shields.io/github/license/prowler-cloud/prowler"></a>
@@ -43,7 +43,7 @@
 
 # Description
 
-**Prowler** is an Open Source security tool to perform AWS, Azure, Google Cloud and Kubernetes security best practices assessments, audits, incident response, continuous monitoring, hardening and forensics readiness, and also remediations! We have Prowler CLI (Command Line Interface) that we call Prowler Open Source and a service on top of it that we call <a href="https://prowler.com">Prowler SaaS</a>.
+**Prowler** is an Open Source security tool to perform AWS, Azure, Google Cloud and Kubernetes security best practices assessments, audits, incident response, continuous monitoring, hardening and forensics readiness, and also remediations! We have Prowler CLI (Command Line Interface) that we call Prowler Open Source and a service on top of it that we call <a href="https://prowler.com">Prowler Cloud</a>.
 
 ## Prowler App
 
@@ -71,10 +71,12 @@ It contains hundreds of controls covering CIS, NIST 800, NIST CSF, CISA, RBI, Fe
 
 | Provider | Checks | Services | [Compliance Frameworks](https://docs.prowler.com/projects/prowler-open-source/en/latest/tutorials/compliance/) | [Categories](https://docs.prowler.com/projects/prowler-open-source/en/latest/tutorials/misc/#categories) |
 |---|---|---|---|---|
-| AWS | 561 | 81 -> `prowler aws --list-services` | 30 -> `prowler aws --list-compliance` | 9 -> `prowler aws --list-categories` |
-| GCP | 77 | 13 -> `prowler gcp --list-services` | 3 -> `prowler gcp --list-compliance` | 2 -> `prowler gcp --list-categories`|
-| Azure | 139 | 18 -> `prowler azure --list-services` | 4 -> `prowler azure --list-compliance` | 2 -> `prowler azure --list-categories` |
-| Kubernetes | 83 | 7 -> `prowler kubernetes --list-services` | 1 -> `prowler kubernetes --list-compliance` | 7 -> `prowler kubernetes --list-categories` |
+| AWS | 564 | 82 | 30 | 10 |
+| GCP | 77 | 13 | 4 | 3 |
+| Azure | 140 | 18 | 5 | 3 |
+| Kubernetes | 83 | 7 | 2 | 7 |
+
+> You can list the checks, services, compliance frameworks and categories with `prowler <provider> --list-checks`, `prowler <provider> --list-services`, `prowler <provider> --list-compliance` and `prowler <provider> --list-categories`.
 
 # 💻 Installation
 
@@ -98,6 +100,7 @@ curl -LO https://raw.githubusercontent.com/prowler-cloud/prowler/refs/heads/mast
 docker compose up -d
 ```
 
+> Containers are built for `linux/amd64`. If your workstation's architecture is different, please set `DOCKER_DEFAULT_PLATFORM=linux/amd64` in your environment or use the `--platform linux/amd64` flag in the docker command.
 > Enjoy Prowler App at http://localhost:3000 by signing up with your email and password.
 
 ### From GitHub
@@ -137,6 +140,19 @@ set -a
 source .env
 cd src/backend
 python -m celery -A config.celery worker -l info -E
+```
+
+**Commands to run the API Scheduler**
+
+``` console
+git clone https://github.com/prowler-cloud/prowler
+cd prowler/api
+poetry install
+poetry shell
+set -a
+source .env
+cd src/backend
+python -m celery -A config.celery beat -l info --scheduler django_celery_beat.schedulers:DatabaseScheduler
 ```
 
 **Commands to run the UI**

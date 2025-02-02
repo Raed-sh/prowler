@@ -14,8 +14,8 @@ export const filterScans = [
     values: ["aws", "azure", "gcp", "kubernetes"],
   },
   {
-    key: "state",
-    labelCheckboxGroup: "State",
+    key: "state__in",
+    labelCheckboxGroup: "Status",
     values: [
       "available",
       "scheduled",
@@ -70,5 +70,13 @@ export const filterInvitations = [
     key: "state",
     labelCheckboxGroup: "State",
     values: ["pending", "accepted", "expired", "revoked"],
+  },
+];
+
+export const filterRoles = [
+  {
+    key: "permission_state",
+    labelCheckboxGroup: "Permissions",
+    values: ["unlimited", "limited", "none"],
   },
 ];

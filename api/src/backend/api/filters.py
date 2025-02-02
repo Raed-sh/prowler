@@ -26,11 +26,13 @@ from api.models import (
     Finding,
     Invitation,
     Membership,
+    PermissionChoices,
     Provider,
     ProviderGroup,
     ProviderSecret,
     Resource,
     ResourceTag,
+    Role,
     Scan,
     ScanSummary,
     SeverityChoices,
@@ -317,6 +319,28 @@ class FindingFilter(FilterSet):
         field_name="resources__type", lookup_expr="icontains"
     )
 
+    # Temporarily disabled until we implement tag filtering in the UI
+    # resource_tag_key = CharFilter(field_name="resources__tags__key")
+    # resource_tag_key__in = CharInFilter(
+    #     field_name="resources__tags__key", lookup_expr="in"
+    # )
+    # resource_tag_key__icontains = CharFilter(
+    #     field_name="resources__tags__key", lookup_expr="icontains"
+    # )
+    # resource_tag_value = CharFilter(field_name="resources__tags__value")
+    # resource_tag_value__in = CharInFilter(
+    #     field_name="resources__tags__value", lookup_expr="in"
+    # )
+    # resource_tag_value__icontains = CharFilter(
+    #     field_name="resources__tags__value", lookup_expr="icontains"
+    # )
+    # resource_tags = CharInFilter(
+    #     method="filter_resource_tag",
+    #     lookup_expr="in",
+    #     help_text="Filter by resource tags `key:value` pairs.\nMultiple values may be "
+    #     "separated by commas.",
+    # )
+
     scan = UUIDFilter(method="filter_scan_id")
     scan__in = UUIDInFilter(method="filter_scan_id_in")
 
@@ -424,6 +448,16 @@ class FindingFilter(FilterSet):
 
         return queryset.filter(id__lte=end).filter(inserted_at__lte=value)
 
+    def filter_resource_tag(self, queryset, name, value):
+        overall_query = Q()
+        for key_value_pair in value:
+            tag_key, tag_value = key_value_pair.split(":", 1)
+            overall_query |= Q(
+                resources__tags__key__icontains=tag_key,
+                resources__tags__value__icontains=tag_value,
+            )
+        return queryset.filter(overall_query).distinct()
+
     @staticmethod
     def maybe_date_to_datetime(value):
         dt = value
@@ -481,6 +515,26 @@ class UserFilter(FilterSet):
         }
 
 
+class RoleFilter(FilterSet):
+    inserted_at = DateFilter(field_name="inserted_at", lookup_expr="date")
+    updated_at = DateFilter(field_name="updated_at", lookup_expr="date")
+    permission_state = ChoiceFilter(
+        choices=PermissionChoices.choices, method="filter_permission_state"
+    )
+
+    def filter_permission_state(self, queryset, name, value):
+        return Role.filter_by_permission_state(queryset, value)
+
+    class Meta:
+        model = Role
+        fields = {
+            "id": ["exact", "in"],
+            "name": ["exact", "in"],
+            "inserted_at": ["gte", "lte"],
+            "updated_at": ["gte", "lte"],
+        }
+
+
 class ComplianceOverviewFilter(FilterSet):
     inserted_at = DateFilter(field_name="inserted_at", lookup_expr="date")
     provider_type = ChoiceFilter(choices=Provider.ProviderChoices.choices)
@@ -521,3 +575,25 @@ class ScanSummaryFilter(FilterSet):
             "inserted_at": ["date", "gte", "lte"],
             "region": ["exact", "icontains", "in"],
         }
+
+
+class ServiceOverviewFilter(ScanSummaryFilter):
+    muted_findings = None
+
+    def is_valid(self):
+        # Check if at least one of the inserted_at filters is present
+        inserted_at_filters = [
+            self.data.get("inserted_at"),
+            self.data.get("inserted_at__gte"),
+            self.data.get("inserted_at__lte"),
+        ]
+        if not any(inserted_at_filters):
+            raise ValidationError(
+                {
+                    "inserted_at": [
+                        "At least one of filter[inserted_at], filter[inserted_at__gte], or "
+                        "filter[inserted_at__lte] is required."
+                    ]
+                }
+            )
+        return super().is_valid()

@@ -1,7 +1,6 @@
 from config.django.base import *  # noqa
 from config.env import env
 
-
 DEBUG = env.bool("DJANGO_DEBUG", default=True)
 ALLOWED_HOSTS = env.list("DJANGO_ALLOWED_HOSTS", default=["*"])
 
@@ -38,3 +37,9 @@ REST_FRAMEWORK["DEFAULT_FILTER_BACKENDS"] = tuple(  # noqa: F405
 ) + ("api.filters.CustomDjangoFilterBackend",)
 
 SECRETS_ENCRYPTION_KEY = "ZMiYVo7m4Fbe2eXXPyrwxdJss2WSalXSv3xHBcJkPl0="
+
+MIDDLEWARE += [  # noqa: F405
+    "silk.middleware.SilkyMiddleware",
+]
+
+INSTALLED_APPS += ["silk"]  # noqa: F405

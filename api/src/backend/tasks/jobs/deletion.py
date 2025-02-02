@@ -1,8 +1,9 @@
 from celery.utils.log import get_task_logger
 from django.db import transaction
 
-from api.db_utils import batch_delete
-from api.models import Finding, Provider, Resource, Scan, ScanSummary
+from api.db_router import MainRouter
+from api.db_utils import batch_delete, rls_transaction
+from api.models import Finding, Provider, Resource, Scan, ScanSummary, Tenant
 
 logger = get_task_logger(__name__)
 
@@ -25,11 +26,6 @@ def delete_provider(pk: str):
     deletion_summary = {}
 
     with transaction.atomic():
-        # Delete Scan Summaries
-        scan_summaries_qs = ScanSummary.all_objects.filter(scan__provider=instance)
-        _, scans_summ_summary = batch_delete(scan_summaries_qs)
-        deletion_summary.update(scans_summ_summary)
-
         # Delete Findings
         findings_qs = Finding.all_objects.filter(scan__provider=instance)
         _, findings_summary = batch_delete(findings_qs)
@@ -47,5 +43,28 @@ def delete_provider(pk: str):
 
         provider_deleted_count, provider_summary = instance.delete()
         deletion_summary.update(provider_summary)
+
+    return deletion_summary
+
+
+def delete_tenant(pk: str):
+    """
+    Gracefully deletes an instance of a tenant along with its related data.
+
+    Args:
+        pk (str): The primary key of the Tenant instance to delete.
+
+    Returns:
+        dict: A dictionary with the count of deleted objects per model,
+              including related models.
+    """
+    deletion_summary = {}
+
+    for provider in Provider.objects.using(MainRouter.admin_db).filter(tenant_id=pk):
+        with rls_transaction(pk):
+            summary = delete_provider(provider.id)
+            deletion_summary.update(summary)
+
+    Tenant.objects.using(MainRouter.admin_db).filter(id=pk).delete()
 
     return deletion_summary

@@ -1,4 +1,4 @@
-**Prowler** is an Open Source security tool to perform AWS, Azure, Google Cloud and Kubernetes security best practices assessments, audits, incident response, continuous monitoring, hardening and forensics readiness, and also remediations! We have Prowler CLI (Command Line Interface) that we call Prowler Open Source and a service on top of it that we call <a href="https://prowler.com">Prowler SaaS</a>.
+**Prowler** is an Open Source security tool to perform AWS, Azure, Google Cloud and Kubernetes security best practices assessments, audits, incident response, continuous monitoring, hardening and forensics readiness, and also remediations! We have Prowler CLI (Command Line Interface) that we call Prowler Open Source and a service on top of it that we call <a href="https://prowler.com">Prowler Cloud</a>.
 
 ## Prowler App
 
@@ -29,7 +29,7 @@ It contains hundreds of controls covering CIS, NIST 800, NIST CSF, CISA, RBI, Fe
 
 Prowler App can be installed in different ways, depending on your environment:
 
-> See how to use Prowler App in the [Prowler App](tutorials/prowler-app.md) section.
+> See how to use Prowler App in the [Prowler App Tutorial](tutorials/prowler-app.md) section.
 
 === "Docker Compose"
 
@@ -44,6 +44,8 @@ Prowler App can be installed in different ways, depending on your environment:
     curl -LO https://raw.githubusercontent.com/prowler-cloud/prowler/refs/heads/master/.env
     docker compose up -d
     ```
+
+    > Containers are built for `linux/amd64`. If your workstation's architecture is different, please set `DOCKER_DEFAULT_PLATFORM=linux/amd64` in your environment or use the `--platform linux/amd64` flag in the docker command.
 
     > Enjoy Prowler App at http://localhost:3000 by signing up with your email and password.
 
@@ -64,6 +66,9 @@ Prowler App can be installed in different ways, depending on your environment:
     * `poetry` installed: [poetry installation](https://python-poetry.org/docs/#installation).
     * `npm` installed: [npm installation](https://docs.npmjs.com/downloading-and-installing-node-js-and-npm).
     * `Docker Compose` installed: https://docs.docker.com/compose/install/.
+
+    ???+ warning
+        Make sure to have `api/.env` and `ui/.env.local` files with the required environment variables. You can find the required environment variables in the [`api/.env.template`](https://github.com/prowler-cloud/prowler/blob/master/api/.env.example) and [`ui/.env.template`](https://github.com/prowler-cloud/prowler/blob/master/ui/.env.template) files.
 
     _Commands to run the API_:
 
@@ -95,6 +100,19 @@ Prowler App can be installed in different ways, depending on your environment:
     python -m celery -A config.celery worker -l info -E
     ```
 
+    _Commands to run the API Scheduler_:
+
+    ``` bash
+    git clone https://github.com/prowler-cloud/prowler \
+    cd prowler/api \
+    poetry install \
+    poetry shell \
+    set -a \
+    source .env \
+    cd src/backend \
+    python -m celery -A config.celery beat -l info --scheduler django_celery_beat.schedulers:DatabaseScheduler
+    ```
+
     _Commands to run the UI_:
 
     ``` bash
@@ -106,9 +124,6 @@ Prowler App can be installed in different ways, depending on your environment:
     ```
 
     > Enjoy Prowler App at http://localhost:3000 by signing up with your email and password.
-
-    ???+ warning
-        Make sure to have `api/.env` and `ui/.env.local` files with the required environment variables. You can find the required environment variables in the [`api/.env.template`](https://github.com/prowler-cloud/prowler/blob/master/api/.env.example) and [`ui/.env.template`](https://github.com/prowler-cloud/prowler/blob/master/ui/.env.template) files.
 
     ???+ warning
         Google and GitHub authentication is only available in [Prowler Cloud](https://prowler.com).
@@ -171,6 +186,8 @@ Prowler is available as a project in [PyPI](https://pypi.org/project/prowler/), 
     * Have `docker` installed: https://docs.docker.com/get-docker/.
     * In the command below, change `-v` to your local directory path in order to access the reports.
     * AWS, GCP, Azure and/or Kubernetes credentials
+
+    > Containers are built for `linux/amd64`. If your workstation's architecture is different, please set `DOCKER_DEFAULT_PLATFORM=linux/amd64` in your environment or use the `--platform linux/amd64` flag in the docker command.
 
     _Commands_:
 
@@ -302,10 +319,14 @@ The available versions of Prowler CLI are the following:
 - `v3-stable`: this tag always point to the latest release for v3.
 
 The container images are available here:
+
 - Prowler CLI:
+
     - [DockerHub](https://hub.docker.com/r/toniblyx/prowler/tags)
     - [AWS Public ECR](https://gallery.ecr.aws/prowler-cloud/prowler)
+
 - Prowler App:
+
     - [DockerHub - Prowler UI](https://hub.docker.com/r/prowlercloud/prowler-ui/tags)
     - [DockerHub - Prowler API](https://hub.docker.com/r/prowlercloud/prowler-api/tags)
 
@@ -373,8 +394,8 @@ After successfully adding and testing your credentials, Prowler will start scann
 #### **View Results**
 While the scan is running, start exploring the findings in these sections:
 
-- **Overview**: High-level summary of the scans. <img src="../../img/overview.png" alt="Overview" width="700"/>
-- **Compliance**: Insights into compliance status. <img src="../../img/compliance.png" alt="Compliance" width="700"/>
+- **Overview**: High-level summary of the scans. <img src="img/overview.png" alt="Overview" width="700"/>
+- **Compliance**: Insights into compliance status. <img src="img/compliance.png" alt="Compliance" width="700"/>
 
 > See more details about the Prowler App usage in the [Prowler App](tutorials/prowler-app.md) section.
 
