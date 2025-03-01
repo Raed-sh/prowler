@@ -1,4 +1,3 @@
-from django.conf import settings
 from django.urls import include, path
 from drf_spectacular.views import SpectacularRedocView
 from rest_framework_nested import routers
@@ -7,7 +6,10 @@ from api.v1.views import (
     ComplianceOverviewViewSet,
     CustomTokenObtainView,
     CustomTokenRefreshView,
+    CustomTokenSwitchTenantView,
     FindingViewSet,
+    GithubSocialLoginView,
+    GoogleSocialLoginView,
     InvitationAcceptViewSet,
     InvitationViewSet,
     MembershipViewSet,
@@ -57,6 +59,7 @@ users_router.register(r"memberships", MembershipViewSet, basename="user-membersh
 urlpatterns = [
     path("tokens", CustomTokenObtainView.as_view(), name="token-obtain"),
     path("tokens/refresh", CustomTokenRefreshView.as_view(), name="token-refresh"),
+    path("tokens/switch", CustomTokenSwitchTenantView.as_view(), name="token-switch"),
     path(
         "providers/secrets",
         ProviderSecretViewSet.as_view({"get": "list", "post": "create"}),
@@ -107,12 +110,11 @@ urlpatterns = [
         ),
         name="provider_group-providers-relationship",
     ),
+    path("tokens/google", GoogleSocialLoginView.as_view(), name="token-google"),
+    path("tokens/github", GithubSocialLoginView.as_view(), name="token-github"),
     path("", include(router.urls)),
     path("", include(tenants_router.urls)),
     path("", include(users_router.urls)),
     path("schema", SchemaView.as_view(), name="schema"),
     path("docs", SpectacularRedocView.as_view(url_name="schema"), name="docs"),
 ]
-
-if settings.DEBUG:
-    urlpatterns += [path("silk/", include("silk.urls", namespace="silk"))]
