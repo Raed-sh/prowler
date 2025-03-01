@@ -94,7 +94,7 @@ class OCSF(Output):
                                 [
                                     finding.metadata.Remediation.Code.NativeIaC,
                                     finding.metadata.Remediation.Code.Terraform,
-                                    # finding.metadata.Remediation.Code.CLI, COMMENTED out AS WE WILL NOT USE IT
+                                    # finding.remediation_code_cli, COMMENTED out AS WE WILL NOT USE IT
                                     finding.metadata.Remediation.Code.Other,
                                     finding.metadata.Remediation.Recommendation.Url,
                                 ],
