@@ -2,7 +2,7 @@ import argparse
 import sys
 from argparse import RawTextHelpFormatter
 
-from dashboard.lib.arguments.arguments import init_dashboard_parser
+# from dashboard.lib.arguments.arguments import init_dashboard_parser
 from prowler.config.config import (
     available_compliance_frameworks,
     available_output_formats,
@@ -84,7 +84,7 @@ Detailed documentation at https://docs.prowler.com
         init_providers_parser(self)
 
         # Dashboard Parser
-        init_dashboard_parser(self)
+        # init_dashboard_parser(self)
 
     def parse(self, args=None) -> argparse.Namespace:
         """
