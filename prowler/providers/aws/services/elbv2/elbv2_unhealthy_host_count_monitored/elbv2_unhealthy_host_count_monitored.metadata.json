@@ -5,7 +5,7 @@
     "CheckType": [
       "Monitoring"
     ],
-    "ServiceName": "elb",
+    "ServiceName": "elbv2",
     "SubServiceName": "",
     "ResourceIdTemplate": "arn:aws:elasticloadbalancing:region:account-id:loadbalancer/lb-name",
     "Severity": "medium",
