@@ -3,7 +3,7 @@
     "CheckID": "cloudwatch_alarm_for_lambda_error_rate",
     "CheckTitle": "Ensure CloudWatch Alarms are Set for Lambda Function Error Rate",
     "CheckType": ["Infrastructure Security"],
-    "ServiceName": "lambda",
+    "ServiceName": "cloudwatch",
     "SubServiceName": "error_rate",
     "ResourceIdTemplate": "arn:aws:lambda:region:account-id:function:function-name",
     "Severity": "high",
