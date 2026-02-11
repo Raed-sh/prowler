@@ -13,7 +13,7 @@ class cloudwatch_alarm_for_lambda_error_rate(Check):
 
         for function in awslambda_client.functions.values():
 
-            report = Check_Report_AWS(self.metadata())
+            report = Check_Report_AWS(metadata=self.metadata(), resource=function)
             report.region = function.region
             report.resource_id = function.name
             report.resource_arn = function.arn

@@ -12,7 +12,7 @@ class cloudwatch_alarm_for_ec2_cpu_utilization(Check):
         expected_namespace = 'AWS/EC2'
 
         for instance in ec2_client.instances:
-            report = Check_Report_AWS(self.metadata())
+            report = Check_Report_AWS(metadata=self.metadata(), resource=instance)
             report.region = instance.region
             report.resource_id = instance.id
             report.resource_arn = instance.arn

@@ -7,7 +7,7 @@ class ec2_instances_have_network_acl_or_security_group(Check):
     def execute(self):
         findings = []
         for instance in ec2_client.instances:
-            report = Check_Report_AWS(self.metadata())
+            report = Check_Report_AWS(metadata=self.metadata(), resource=instance)
             report.region = instance.region
             report.resource_id = instance.id
             report.resource_arn = instance.arn
